@@ -12,7 +12,6 @@ export interface ProfileLike {
 type SafeValue = null | boolean | number | string | SafeValue[] | { [key: string]: SafeValue }
 
 const SENSITIVE_OR_VOLATILE_KEY = /(?:pass(?:word|phrase|wd)?|token|secret|credential|authorization|api[_-]?key|private[_-]?key|environment|env|cwd|working[_-]?directory|window|columns|rows|process[_-]?id|pid|pty|restore|session)/iu
-const SENSITIVE_ARGUMENT = /(?:pass(?:word|phrase|wd)?|token|secret|credential|api[_-]?key|private[_-]?key)/iu
 
 export class ConnectionIdentityResolver {
     resolve (profile: ProfileLike, tabLifetimeKey: string): ConnectionIdentity {
@@ -74,27 +73,25 @@ function resolveSshCanonical (options: Record<string, unknown>): string | undefi
 }
 
 function resolveSerialCanonical (options: Record<string, unknown>): string | undefined {
-    const port = normalizeText(options.port).toLowerCase()
-    if (!port) {
+    const device = normalizeText(options.device).toLowerCase()
+    const baud = normalizeBaud(options.baud)
+    if (!device || !baud) {
         return undefined
     }
-    return [
-        'serial',
-        port,
-        stableScalar(options.baudrate),
-        stableScalar(options.databits),
-        stableScalar(options.stopbits),
-        normalizeText(options.parity).toLowerCase(),
-    ].join('\0')
+    return ['serial', device, baud].join('\0')
 }
 
 function resolveLocalCanonical (options: Record<string, unknown>): string | undefined {
-    const command = normalizeText(options.command)
-    const args = normalizeArguments(options.args)
-    if (!command || !args) {
+    const shell = normalizeText(options.shell).toLowerCase()
+    if (!shell) {
         return undefined
     }
-    return JSON.stringify({ args, command, shellType: normalizeText(options.shellType).toLowerCase(), type: 'local' })
+    return JSON.stringify({
+        path: normalizeText(options.path),
+        provider: normalizeText(options.provider).toLowerCase(),
+        shell,
+        type: 'local',
+    })
 }
 
 function resolveProviderCanonical (type: string, name: string, options: Record<string, unknown>): string | undefined {
@@ -117,27 +114,9 @@ function normalizePort (value: unknown): string | undefined {
     return Number.isInteger(port) && port >= 1 && port <= 65535 ? String(port) : undefined
 }
 
-function stableScalar (value: unknown): string {
-    if (typeof value === 'string') {
-        return value.trim()
-    }
-    if (typeof value === 'number' && Number.isFinite(value)) {
-        return String(value)
-    }
-    if (typeof value === 'boolean') {
-        return String(value)
-    }
-    return ''
-}
-
-function normalizeArguments (value: unknown): string[] | undefined {
-    if (value === undefined) {
-        return []
-    }
-    if (!Array.isArray(value) || value.some(argument => typeof argument !== 'string' || SENSITIVE_ARGUMENT.test(argument))) {
-        return undefined
-    }
-    return value.map(argument => argument.trim())
+function normalizeBaud (value: unknown): string | undefined {
+    const baud = Number(value)
+    return Number.isInteger(baud) && baud > 0 ? String(baud) : undefined
 }
 
 function sanitizeOptions (value: unknown, ancestors = new WeakSet<object>()): SafeValue | undefined {

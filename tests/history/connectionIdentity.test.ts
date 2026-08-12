@@ -24,13 +24,29 @@ test('unsafe anonymous profiles use tab-lifetime memory', () => {
     })
 })
 
-test('serial and local temporary profiles include their stable connection options', () => {
-    const serialA = resolver.resolve({ type: 'serial', options: { port: 'COM3', baudrate: 9600, databits: 8, stopbits: 1, parity: 'none' } }, 'a')
-    const serialB = resolver.resolve({ type: 'serial', options: { port: 'com3', baudrate: 115200, databits: 8, stopbits: 1, parity: 'none' } }, 'b')
-    const localA = resolver.resolve({ type: 'local', options: { command: '/bin/bash', args: ['--noprofile'], shellType: 'bash' } }, 'c')
-    const localB = resolver.resolve({ type: 'local', options: { command: '/bin/bash', args: ['--norc'], shellType: 'bash' } }, 'd')
+test('serial quick connect persists normalized device and baud identities', () => {
+    const serialA = resolver.resolve({ type: 'serial', options: { device: 'COM3', baud: 9600 } }, 'a')
+    const serialB = resolver.resolve({ type: 'SERIAL', options: { device: 'com3', baud: 115200 } }, 'b')
+    expect(serialA.persistent).toBe(true)
     expect(serialA.key).not.toBe(serialB.key)
+    expect(resolver.resolve({ type: 'serial', options: { device: 'COM3' } }, 'missing-baud').persistent).toBe(false)
+    expect(resolver.resolve({ type: 'serial', options: { device: 'COM3', baud: 'fast' } }, 'invalid-baud').persistent).toBe(false)
+    expect(resolver.resolve({ type: 'serial', options: { baud: 9600 } }, 'missing-device').persistent).toBe(false)
+})
+
+test('local quick connect persists shell, path, and provider identities', () => {
+    const localA = resolver.resolve({ type: 'local', options: { shell: 'bash', path: '/bin/bash', provider: 'builtin' } }, 'a')
+    const localB = resolver.resolve({ type: 'LOCAL', options: { shell: 'bash', path: '/bin/bash', provider: 'custom' } }, 'b')
+    expect(localA.persistent).toBe(true)
     expect(localA.key).not.toBe(localB.key)
+    expect(resolver.resolve({ type: 'local', options: { path: '/bin/bash', provider: 'builtin' } }, 'missing-shell').persistent).toBe(false)
+})
+
+test('ssh quick connect separates explicit ports for the same user and host', () => {
+    const a = resolver.resolve({ type: 'ssh', options: { user: 'root', host: 'example.com', port: 22 } }, 'a')
+    const b = resolver.resolve({ type: 'ssh', options: { user: 'root', host: 'example.com', port: 2222 } }, 'b')
+    expect(a.persistent).toBe(true)
+    expect(a.key).not.toBe(b.key)
 })
 
 test('other providers discard sensitive and session-only options before sorting', () => {
