@@ -4,6 +4,10 @@ const BRACKETED_PASTE_START = Buffer.from('\x1b[200~')
 const BRACKETED_PASTE_END = Buffer.from('\x1b[201~')
 
 describe('CommandInputMiddleware', () => {
+    afterEach(() => {
+        jest.useRealTimers()
+    })
+
     test('forwards ordinary input and Ctrl+C byte-for-byte', () => {
         const routes: Buffer[] = []
         const middleware = new CommandInputMiddleware(action => ({ consume: false, action }))
@@ -36,6 +40,72 @@ describe('CommandInputMiddleware', () => {
         expect(Buffer.concat(routes)).toEqual(input)
     })
 
+    test('never consumes unknown raw bytes even when the router requests it', () => {
+        const actions: string[] = []
+        const routes: Buffer[] = []
+        const input = Buffer.from('\x1b[99~')
+        const middleware = new CommandInputMiddleware(action => {
+            actions.push(action.type)
+            return { consume: true }
+        })
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        middleware.feedFromTerminal(input)
+        expect(actions).toEqual(['unknown'])
+        expect(Buffer.concat(routes)).toEqual(input)
+    })
+
+    test('finalizes a lone Escape within the configured bound', () => {
+        jest.useFakeTimers()
+        const actions: string[] = []
+        const routes: Buffer[] = []
+        const middleware = new CommandInputMiddleware(action => {
+            actions.push(action.type)
+            return { consume: false }
+        }, { pendingTimeoutMs: 25 })
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        middleware.feedFromTerminal(Buffer.from([0x1b]))
+        jest.advanceTimersByTime(24)
+        expect(actions).toEqual([])
+        expect(routes).toEqual([])
+        jest.advanceTimersByTime(1)
+        expect(actions).toEqual(['escape'])
+        expect(Buffer.concat(routes)).toEqual(Buffer.from([0x1b]))
+    })
+
+    test('keeps a split arrow as one action when it completes before the bound', () => {
+        jest.useFakeTimers()
+        const actions: string[] = []
+        const routes: Buffer[] = []
+        const middleware = new CommandInputMiddleware(action => {
+            actions.push(action.type)
+            return { consume: false }
+        }, { pendingTimeoutMs: 25 })
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        middleware.feedFromTerminal(Buffer.from([0x1b]))
+        jest.advanceTimersByTime(20)
+        middleware.feedFromTerminal(Buffer.from('[D'))
+        jest.advanceTimersByTime(25)
+        expect(actions).toEqual(['left'])
+        expect(Buffer.concat(routes)).toEqual(Buffer.from('\x1b[D'))
+    })
+
+    test('close forwards truncated raw bytes before completing the middleware', () => {
+        jest.useFakeTimers()
+        const actions: string[] = []
+        const routes: Buffer[] = []
+        const middleware = new CommandInputMiddleware(action => {
+            actions.push(action.type)
+            return { consume: true }
+        }, { pendingTimeoutMs: 25 })
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        const truncated = Buffer.from([0xf0, 0x9f])
+        middleware.feedFromTerminal(truncated)
+        middleware.close()
+        jest.runOnlyPendingTimers()
+        expect(actions).toEqual(['unknown'])
+        expect(Buffer.concat(routes)).toEqual(truncated)
+    })
+
     test('forwards UTF-8 and escape sequences split across buffers without partial output', () => {
         const routes: Buffer[] = []
         const middleware = new CommandInputMiddleware(() => ({ consume: false }))
@@ -53,6 +123,19 @@ describe('CommandInputMiddleware', () => {
         middleware.outputToSession$.subscribe(data => routes.push(data))
         middleware.injectReplacement({ current: 'git ch', cursor: 6, candidate: 'git checkout' })
         expect(Buffer.concat(routes)).toEqual(Buffer.from('eckout'))
+    })
+
+    test('uses full replacement when the current prefix ends inside a candidate grapheme', () => {
+        const routes: Buffer[] = []
+        const middleware = new CommandInputMiddleware(() => ({ consume: false }))
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        middleware.injectReplacement({ current: 'e', cursor: 1, candidate: 'e\u0301' })
+        const bytes = Buffer.concat(routes)
+        expect(bytes).toEqual(Buffer.concat([
+            Buffer.from([0x7f]),
+            Buffer.from('e\u0301'),
+        ]))
+        expect(bytes).not.toEqual(Buffer.from('\u0301'))
     })
 
     test('replaces a line using grapheme counts and the known grapheme cursor', () => {
@@ -88,15 +171,20 @@ describe('CommandInputMiddleware', () => {
         expect(bytes.includes(0x0a)).toBe(false)
     })
 
-    test('injects an intentional multiline candidate as bracketed paste without final Enter', () => {
+    test.each([
+        'echo one\necho two',
+        'echo one\recho two',
+        'echo one\r\necho two\r\n',
+        'echo one\n\techo two',
+    ])('injects intentional multiline candidate %p exactly without appended Enter', candidate => {
         const routes: Buffer[] = []
         const middleware = new CommandInputMiddleware(() => ({ consume: false }))
         middleware.outputToSession$.subscribe(data => routes.push(data))
-        middleware.injectBracketedPaste('echo one\necho two')
+        middleware.injectBracketedPaste(candidate)
         const bytes = Buffer.concat(routes)
         expect(bytes).toEqual(Buffer.concat([
             BRACKETED_PASTE_START,
-            Buffer.from('echo one\necho two'),
+            Buffer.from(candidate),
             BRACKETED_PASTE_END,
         ]))
         expect(bytes.subarray(bytes.length - BRACKETED_PASTE_END.length)).toEqual(BRACKETED_PASTE_END)
@@ -107,7 +195,6 @@ describe('CommandInputMiddleware', () => {
         const middleware = new CommandInputMiddleware(() => ({ consume: false }))
         middleware.outputToSession$.subscribe(data => routes.push(data))
         expect(() => middleware.injectBracketedPaste('single line')).toThrow()
-        expect(() => middleware.injectBracketedPaste('one\ntwo\n')).toThrow()
         expect(() => middleware.injectBracketedPaste('safe\n\x1b[201~unsafe')).toThrow()
         expect(() => middleware.injectBracketedPaste('safe\n\x03unsafe')).toThrow()
         expect(routes).toEqual([])

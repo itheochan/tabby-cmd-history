@@ -55,6 +55,25 @@ describe('TerminalInputDecoder', () => {
         expect(Buffer.concat(tokens.map(token => token.raw))).toEqual(bytes)
     })
 
+    test('rejects an invalid UTF-8 prefix immediately without holding following text', () => {
+        const decoder = new TerminalInputDecoder()
+        const tokens = decoder.decode(Buffer.from([0xf0, 0x61]))
+        expect(tokens).toEqual([
+            { action: { type: 'unknown' }, raw: Buffer.from([0xf0]) },
+            { action: { type: 'insert', text: 'a' }, raw: Buffer.from('a') },
+        ])
+        expect(decoder.hasPending).toBe(false)
+    })
+
+    test('flushes a truly truncated UTF-8 prefix as unknown raw bytes', () => {
+        const decoder = new TerminalInputDecoder()
+        const raw = Buffer.from([0xf0, 0x9f])
+        expect(decoder.decode(raw)).toEqual([])
+        expect(decoder.hasPending).toBe(true)
+        expect(decoder.flush()).toEqual([{ action: { type: 'unknown' }, raw }])
+        expect(decoder.hasPending).toBe(false)
+    })
+
     test('waits for complete known and unknown escape sequences split across chunks', () => {
         const decoder = new TerminalInputDecoder()
         expect(decoder.decode(Buffer.from([0x1b]))).toEqual([])
@@ -68,6 +87,24 @@ describe('TerminalInputDecoder', () => {
         expect(unknown).toEqual([{
             action: { type: 'unknown' },
             raw: Buffer.from([0x1b, 0x5b, 0x39, 0x39, 0x7e]),
+        }])
+    })
+
+    test('flushes a lone Escape explicitly and incomplete escape sequences as unknown', () => {
+        const decoder = new TerminalInputDecoder()
+        expect(decoder.decode(Buffer.from([0x1b]))).toEqual([])
+        expect(decoder.hasPending).toBe(true)
+        expect(decoder.flush()).toEqual([{
+            action: { type: 'escape' },
+            raw: Buffer.from([0x1b]),
+        }])
+        expect(decoder.hasPending).toBe(false)
+
+        const incomplete = Buffer.from('\x1b[2')
+        expect(decoder.decode(incomplete)).toEqual([])
+        expect(decoder.flush()).toEqual([{
+            action: { type: 'unknown' },
+            raw: incomplete,
         }])
     })
 
@@ -107,6 +144,27 @@ describe('TerminalInputDecoder', () => {
             { type: 'paste', text: '' },
         ])
         expect(Buffer.concat(tokens.map(token => token.raw))).toEqual(bytes)
+    })
+
+    test('flush resets unfinished bracketed paste while preserving its pending marker bytes', () => {
+        const decoder = new TerminalInputDecoder()
+        const start = Buffer.from('\x1b[200~')
+        const partialEnd = Buffer.from('\x1b[20')
+        const tokens = [
+            ...decoder.decode(start),
+            ...decoder.decode(Buffer.from('data')),
+            ...decoder.decode(partialEnd),
+        ]
+        expect(decoder.hasPending).toBe(true)
+        tokens.push(...decoder.flush())
+        expect(tokens.map(token => token.action)).toEqual([
+            { type: 'paste', text: '' },
+            { type: 'paste', text: 'data' },
+            { type: 'unknown' },
+        ])
+        expect(Buffer.concat(tokens.map(token => token.raw))).toEqual(Buffer.concat([start, Buffer.from('data'), partialEnd]))
+        expect(decoder.hasPending).toBe(false)
+        expect(decoder.decode(Buffer.from('x'))[0].action).toEqual({ type: 'insert', text: 'x' })
     })
 
     test('turns unknown control bytes into unknown actions without losing surrounding text', () => {

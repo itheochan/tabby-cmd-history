@@ -14,6 +14,10 @@ export interface ReplacementInput {
 
 export type InputRouter = (action: TerminalInputAction) => InputRouteDecision
 
+export interface CommandInputMiddlewareOptions {
+    pendingTimeoutMs?: number
+}
+
 const RIGHT = Buffer.from('\x1b[C')
 const BACKSPACE = Buffer.from([0x7f])
 const BRACKETED_PASTE_START = Buffer.from('\x1b[200~')
@@ -22,23 +26,32 @@ const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme
 
 export class CommandInputMiddleware extends SessionMiddleware {
     private readonly decoder = new TerminalInputDecoder()
+    private readonly pendingTimeoutMs: number
+    private pendingTimer: ReturnType<typeof setTimeout> | null = null
 
-    constructor (private readonly router: InputRouter) {
+    constructor (
+        private readonly router: InputRouter,
+        options: CommandInputMiddlewareOptions = {},
+    ) {
         super()
+        this.pendingTimeoutMs = options.pendingTimeoutMs ?? 25
     }
 
     override feedFromTerminal (data: Buffer): void {
-        for (const token of this.decoder.decode(data)) {
-            let consume = false
-            try {
-                consume = this.router(token.action)?.consume === true
-            } catch {
-                consume = false
-            }
-            if (!consume) {
-                this.outputToSession.next(token.raw)
-            }
+        this.clearPendingTimer()
+        this.route(this.decoder.decode(data))
+        if (this.decoder.hasPending) {
+            this.pendingTimer = setTimeout(() => {
+                this.pendingTimer = null
+                this.route(this.decoder.flush())
+            }, this.pendingTimeoutMs)
         }
+    }
+
+    override close (): void {
+        this.clearPendingTimer()
+        this.route(this.decoder.flush())
+        super.close()
     }
 
     injectReplacement ({ current, cursor, candidate }: ReplacementInput): void {
@@ -49,7 +62,7 @@ export class CommandInputMiddleware extends SessionMiddleware {
             throw new RangeError('cursor must be a valid grapheme index')
         }
 
-        if (cursor === currentLength && candidate.startsWith(current)) {
+        if (cursor === currentLength && candidate.startsWith(current) && isGraphemeBoundary(candidate, current.length)) {
             this.emit(Buffer.from(candidate.slice(current.length)))
             return
         }
@@ -60,10 +73,10 @@ export class CommandInputMiddleware extends SessionMiddleware {
     }
 
     injectBracketedPaste (candidate: string): void {
-        if (!candidate.includes('\n') || candidate.endsWith('\n')) {
+        if (!candidate.includes('\n') && !candidate.includes('\r')) {
             throw new Error('bracketed paste requires an intentional multiline candidate')
         }
-        if (/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(candidate)) {
+        if (/[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f]/u.test(candidate)) {
             throw new Error('bracketed paste candidate contains unsafe control bytes')
         }
         this.emit(Buffer.concat([
@@ -84,6 +97,29 @@ export class CommandInputMiddleware extends SessionMiddleware {
             this.outputToSession.next(bytes)
         }
     }
+
+    private route (tokens: ReturnType<TerminalInputDecoder['decode']>): void {
+        for (const token of tokens) {
+            let consume = false
+            try {
+                consume = this.router(token.action)?.consume === true
+            } catch {
+                consume = false
+            }
+            if (token.action.type === 'unknown' || !consume) {
+                if (token.raw.length > 0) {
+                    this.outputToSession.next(token.raw)
+                }
+            }
+        }
+    }
+
+    private clearPendingTimer (): void {
+        if (this.pendingTimer !== null) {
+            clearTimeout(this.pendingTimer)
+            this.pendingTimer = null
+        }
+    }
 }
 
 function assertSingleLine (text: string, label: string): void {
@@ -94,4 +130,8 @@ function assertSingleLine (text: string, label: string): void {
 
 function graphemes (text: string): string[] {
     return Array.from(graphemeSegmenter.segment(text), part => part.segment)
+}
+
+function isGraphemeBoundary (text: string, offset: number): boolean {
+    return offset === text.length || Array.from(graphemeSegmenter.segment(text), part => part.index).includes(offset)
 }

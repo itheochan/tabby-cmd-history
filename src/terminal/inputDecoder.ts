@@ -5,7 +5,7 @@ export interface DecodedInputToken {
     raw: Buffer
 }
 
-export type TerminalInputAction = EditAction | { type: 'up' | 'down' }
+export type TerminalInputAction = EditAction | { type: 'up' | 'down' | 'escape' }
 
 const ESC = 0x1b
 const BRACKETED_PASTE_START = Buffer.from('\x1b[200~')
@@ -53,6 +53,10 @@ interface EscapeSequence {
 export class TerminalInputDecoder {
     private pending = Buffer.alloc(0)
     private bracketedPaste = false
+
+    get hasPending (): boolean {
+        return this.pending.length > 0 || this.bracketedPaste
+    }
 
     decode (data: Buffer): DecodedInputToken[] {
         if (data.length === 0) {
@@ -119,6 +123,23 @@ export class TerminalInputDecoder {
         }
 
         return tokens
+    }
+
+    flush (): DecodedInputToken[] {
+        const raw = this.pending
+        const wasBracketedPaste = this.bracketedPaste
+        this.pending = Buffer.alloc(0)
+        this.bracketedPaste = false
+
+        if (raw.length === 0) {
+            return wasBracketedPaste
+                ? [{ action: { type: 'unknown' }, raw }]
+                : []
+        }
+        if (!wasBracketedPaste && raw.length === 1 && raw[0] === ESC) {
+            return [{ action: { type: 'escape' }, raw }]
+        }
+        return [{ action: { type: 'unknown' }, raw }]
     }
 }
 
@@ -213,6 +234,13 @@ function emitUtf8 (
             continue
         }
         if (offset + length > raw.length) {
+            if (!validUtf8Prefix(raw, offset, length)) {
+                flushText(offset)
+                tokens.push({ action: { type: 'unknown' }, raw: copy(raw.subarray(offset, offset + 1)) })
+                offset++
+                textStart = offset
+                continue
+            }
             if (allowIncomplete) {
                 flushText(offset)
                 return offset
@@ -254,13 +282,21 @@ function utf8Length (lead: number): number {
 }
 
 function validUtf8 (raw: Buffer, offset: number, length: number): boolean {
-    for (let index = 1; index < length; index++) {
+    return validUtf8Prefix(raw, offset, length)
+}
+
+function validUtf8Prefix (raw: Buffer, offset: number, length: number): boolean {
+    const available = Math.min(length, raw.length - offset)
+    for (let index = 1; index < available; index++) {
         if (raw[offset + index] < 0x80 || raw[offset + index] > 0xbf) {
             return false
         }
     }
     const lead = raw[offset]
     const second = raw[offset + 1]
+    if (available < 2) {
+        return true
+    }
     if (lead === 0xe0 && second < 0xa0) {
         return false
     }
