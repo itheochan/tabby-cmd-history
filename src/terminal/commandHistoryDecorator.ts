@@ -1,0 +1,79 @@
+import { ConfigService, LogService } from 'tabby-core'
+import { BaseTerminalProfile, BaseTerminalTabComponent, TerminalDecorator } from 'tabby-terminal'
+import { CommandHistoryConfig, DEFAULT_COMMAND_HISTORY_CONFIG } from '../config/historyConfig'
+import { ConnectionIdentityResolver } from '../history/connectionIdentity'
+import { HistoryService } from '../history/historyService'
+import {
+    CommandHistoryController,
+    CommandHistoryControllerDependencies,
+} from './commandHistoryController'
+
+export type CommandHistoryControllerFactory = (
+    terminal: BaseTerminalTabComponent<BaseTerminalProfile>,
+    dependencies: CommandHistoryControllerDependencies,
+) => CommandHistoryController
+
+export class CommandHistoryTerminalDecorator extends TerminalDecorator {
+    private readonly controllers = new WeakMap<BaseTerminalTabComponent<BaseTerminalProfile>, CommandHistoryController>()
+
+    constructor (
+        private readonly configService: ConfigService,
+        logService: LogService,
+        history: HistoryService,
+        identityResolver: ConnectionIdentityResolver,
+        private readonly createController: CommandHistoryControllerFactory = (
+            terminal,
+            dependencies,
+        ) => new CommandHistoryController(terminal, dependencies),
+    ) {
+        super()
+        this.dependencies = {
+            history,
+            identityResolver,
+            getConfig: () => this.currentConfig(),
+            configChanged$: configService.changed$,
+            logger: logService.create('cmd-history'),
+        }
+    }
+
+    private readonly dependencies: CommandHistoryControllerDependencies
+
+    override attach (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): void {
+        if (this.controllers.has(terminal)) {
+            return
+        }
+        super.attach(terminal)
+        let controller: CommandHistoryController | undefined
+        try {
+            controller = this.createController(terminal, this.dependencies)
+            this.controllers.set(terminal, controller)
+            controller.attach()
+        } catch {
+            this.controllers.delete(terminal)
+            controller?.destroy()
+            try {
+                this.dependencies.logger.warn('cmd-history stage=decorator-attach key=unresolved')
+            } catch {
+                // Diagnostics must never interrupt terminal creation.
+            }
+        }
+    }
+
+    override detach (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): void {
+        const controller = this.controllers.get(terminal)
+        if (controller) {
+            this.controllers.delete(terminal)
+            controller.destroy()
+        }
+        super.detach(terminal)
+    }
+
+    private currentConfig (): CommandHistoryConfig {
+        return this.configService.store?.cmdHistory ?? {
+            ...DEFAULT_COMMAND_HISTORY_CONFIG,
+            exclusionPatterns: [...DEFAULT_COMMAND_HISTORY_CONFIG.exclusionPatterns],
+            weights: { ...DEFAULT_COMMAND_HISTORY_CONFIG.weights },
+            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings },
+        }
+    }
+}

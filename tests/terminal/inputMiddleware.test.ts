@@ -199,4 +199,20 @@ describe('CommandInputMiddleware', () => {
         expect(() => middleware.injectBracketedPaste('safe\n\x03unsafe')).toThrow()
         expect(routes).toEqual([])
     })
+
+    test('replaces a known multiline buffer with bracketed paste without executing it', () => {
+        const routes: Buffer[] = []
+        const middleware = new CommandInputMiddleware(() => ({ consume: false }))
+        middleware.outputToSession$.subscribe(data => routes.push(data))
+        middleware.injectBracketedReplacement({
+            current: 'echo old\necho line',
+            cursor: 18,
+            candidate: 'echo one\necho two',
+        })
+        const bytes = Buffer.concat(routes)
+        const paste = Buffer.from('\x1b[200~echo one\necho two\x1b[201~')
+        expect(bytes.subarray(-paste.length)).toEqual(paste)
+        expect(bytes.subarray(0, bytes.length - paste.length)).toEqual(Buffer.alloc(18, 0x7f))
+        expect(bytes.subarray(bytes.length - 6)).not.toContain(0x0d)
+    })
 })

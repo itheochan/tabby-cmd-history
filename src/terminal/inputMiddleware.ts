@@ -12,6 +12,8 @@ export interface ReplacementInput {
     candidate: string
 }
 
+export interface BracketedReplacementInput extends ReplacementInput {}
+
 export type InputRouter = (action: TerminalInputAction) => InputRouteDecision
 
 export interface CommandInputMiddlewareOptions {
@@ -73,17 +75,21 @@ export class CommandInputMiddleware extends SessionMiddleware {
     }
 
     injectBracketedPaste (candidate: string): void {
-        if (!candidate.includes('\n') && !candidate.includes('\r')) {
-            throw new Error('bracketed paste requires an intentional multiline candidate')
+        validateBracketedPaste(candidate)
+        this.emit(bracketedPaste(candidate))
+    }
+
+    injectBracketedReplacement ({ current, cursor, candidate }: BracketedReplacementInput): void {
+        assertSafeBuffer(current, 'current command')
+        validateBracketedPaste(candidate)
+        const currentLength = graphemes(current).length
+        if (!Number.isInteger(cursor) || cursor < 0 || cursor > currentLength) {
+            throw new RangeError('cursor must be a valid grapheme index')
         }
-        if (/[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f]/u.test(candidate)) {
-            throw new Error('bracketed paste candidate contains unsafe control bytes')
-        }
-        this.emit(Buffer.concat([
-            BRACKETED_PASTE_START,
-            Buffer.from(candidate),
-            BRACKETED_PASTE_END,
-        ]))
+
+        this.emitRepeated(RIGHT, currentLength - cursor)
+        this.emitRepeated(BACKSPACE, currentLength)
+        this.emit(bracketedPaste(candidate))
     }
 
     private emitRepeated (bytes: Buffer, count: number): void {
@@ -126,6 +132,25 @@ function assertSingleLine (text: string, label: string): void {
     if (/[\u0000-\u001f\u007f-\u009f]/u.test(text)) {
         throw new Error(`${label} must not contain terminal control bytes`)
     }
+}
+
+function assertSafeBuffer (text: string, label: string): void {
+    if (/[^\r\n\t\u0020-\u007e\u00a0-\u{10ffff}]/u.test(text)) {
+        throw new Error(`${label} contains unsafe terminal control bytes`)
+    }
+}
+
+function validateBracketedPaste (candidate: string): void {
+    if (!candidate.includes('\n') && !candidate.includes('\r')) {
+        throw new Error('bracketed paste requires an intentional multiline candidate')
+    }
+    if (/[\u0000-\u0008\u000b-\u000c\u000e-\u001f\u007f-\u009f]/u.test(candidate)) {
+        throw new Error('bracketed paste candidate contains unsafe control bytes')
+    }
+}
+
+function bracketedPaste (candidate: string): Buffer {
+    return Buffer.concat([BRACKETED_PASTE_START, Buffer.from(candidate), BRACKETED_PASTE_END])
 }
 
 function graphemes (text: string): string[] {

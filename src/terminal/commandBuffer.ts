@@ -106,6 +106,13 @@ export class CommandBuffer {
         this.dismissed = true
     }
 
+    adopt (text: string): void {
+        this.graphemes = segment(text)
+        this.cursor = this.graphemes.length
+        this.confident = true
+        this.dismissed = false
+    }
+
     private deleteWord (): void {
         let start = this.cursor
         while (start > 0 && /^\s$/u.test(this.graphemes[start - 1])) {
@@ -125,6 +132,7 @@ export class CommandBuffer {
         const updated = text.slice(0, startOffset) + inserted + text.slice(endOffset)
         this.graphemes = segment(updated)
         this.cursor = cursorAtOrAfterOffset(this.graphemes, cursorOffset)
+        this.dismissed = false
     }
 }
 

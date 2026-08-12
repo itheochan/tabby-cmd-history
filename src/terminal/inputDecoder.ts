@@ -5,7 +5,13 @@ export interface DecodedInputToken {
     raw: Buffer
 }
 
-export type TerminalInputAction = EditAction | { type: 'up' | 'down' | 'escape' }
+export type TerminalInputAction = EditAction |
+    { type: 'up' } |
+    { type: 'down' } |
+    { type: 'escape' } |
+    { type: 'ctrlUp' } |
+    { type: 'ctrlDown' } |
+    { type: 'ctrlRight' }
 
 const ESC = 0x1b
 const BRACKETED_PASTE_START = Buffer.from('\x1b[200~')
@@ -42,6 +48,9 @@ const escapeActions = new Map<string, TerminalInputAction>([
     ['\x1bOD', { type: 'left' }],
     ['\x1bOH', { type: 'home' }],
     ['\x1bOF', { type: 'end' }],
+    ['\x1b[1;5A', { type: 'ctrlUp' }],
+    ['\x1b[1;5B', { type: 'ctrlDown' }],
+    ['\x1b[1;5C', { type: 'ctrlRight' }],
 ])
 
 interface EscapeSequence {
@@ -71,6 +80,17 @@ export class TerminalInputDecoder {
         while (offset < input.length) {
             if (this.bracketedPaste) {
                 const end = input.indexOf(BRACKETED_PASTE_END, offset)
+                const interrupt = input.indexOf(0x03, offset)
+                if (interrupt !== -1 && (end === -1 || interrupt < end)) {
+                    emitUtf8(input.subarray(offset, interrupt), 'paste', false, tokens)
+                    tokens.push({
+                        action: { type: 'interrupt' },
+                        raw: copy(input.subarray(interrupt, interrupt + 1)),
+                    })
+                    offset = interrupt + 1
+                    this.bracketedPaste = false
+                    continue
+                }
                 if (end !== -1) {
                     emitUtf8(input.subarray(offset, end), 'paste', false, tokens)
                     tokens.push({ action: { type: 'paste', text: '' }, raw: copy(BRACKETED_PASTE_END) })
