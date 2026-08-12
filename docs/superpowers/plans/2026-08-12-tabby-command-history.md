@@ -881,10 +881,12 @@ test.each(['inline', 'list', 'hybrid'] as const)('renders %s mode', mode => {
     const host = document.createElement('div')
     const overlay = new PredictionOverlay(host)
     overlay.render({ mode, query: 'git ch', predictions, selectedIndex: 0, expanded: mode === 'list', position: { left: 20, top: 30, above: false } })
-    expect(host.querySelector('[data-command="git checkout main"]')).not.toBeNull()
+    expect(host.querySelector('.cmd-history-overlay')?.textContent).toContain('eckout main')
     expect(host.querySelector('.cmd-history-overlay')?.getAttribute('data-mode')).toBe(mode)
 })
 ```
+
+DOM 断言通过 role、class 和 `textContent` 验证展示；命令文本不得复制到 `data-*`、ARIA 或其他属性。这是 `textContent`-only 安全边界的一部分，避免扩大命令内容的 DOM 绑定面。
 
 - [ ] **Step 3: 运行并确认失败**
 

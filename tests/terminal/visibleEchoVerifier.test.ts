@@ -38,6 +38,13 @@ test('fails closed when visible evidence is unavailable, incomplete, or mismatch
     expect(verifier.matches(['PS>'], '   ')).toBe(false)
 })
 
+test('rejects evidence elements containing embedded line separators', () => {
+    const verifier = new VisibleEchoVerifier()
+
+    expect(verifier.matches(['PS> echo one\n>> two'], 'echo one\ntwo')).toBe(false)
+    expect(verifier.matches(['PS> echo one\r>> two'], 'echo one\ntwo')).toBe(false)
+})
+
 test('compares multiline commands line-by-line without interpreting continuation prompts', () => {
     const verifier = new VisibleEchoVerifier()
 
@@ -109,4 +116,37 @@ test('fails closed when screen bounds or terminal metrics are unavailable', () =
     host.append(screen)
     screen.getBoundingClientRect = () => rect(0, 0, 0, 0)
     expect(adapter.measure(host, { cursorX: 0, cursorY: 0, cols: 0, rows: 24 }, { width: 10, height: 10 })).toBeNull()
+})
+
+test.each([
+    ['host left', rect(Number.NaN, 0, 100, 100), rect(0, 0, 100, 100)],
+    ['host bottom', { ...rect(0, 0, 100, 100), bottom: Number.POSITIVE_INFINITY }, rect(0, 0, 100, 100)],
+    ['screen top', rect(0, 0, 100, 100), rect(0, Number.NaN, 100, 100)],
+    ['screen right', rect(0, 0, 100, 100), { ...rect(0, 0, 100, 100), right: Number.POSITIVE_INFINITY }],
+] as const)('fails closed for non-finite %s bounds', (_name, hostBounds, screenBounds) => {
+    const host = document.createElement('div')
+    const screen = document.createElement('div')
+    screen.className = 'xterm-screen'
+    host.append(screen)
+    host.getBoundingClientRect = () => hostBounds
+    screen.getBoundingClientRect = () => screenBounds
+
+    expect(new TerminalGeometryAdapter().measure(
+        host,
+        { cursorX: 1, cursorY: 1, cols: 10, rows: 10 },
+        { width: 10, height: 10 },
+    )).toBeNull()
+})
+
+test('fails closed for non-finite overlay dimensions', () => {
+    const host = document.createElement('div')
+    const screen = document.createElement('div')
+    screen.className = 'xterm-screen'
+    host.append(screen)
+    host.getBoundingClientRect = () => rect(0, 0, 100, 100)
+    screen.getBoundingClientRect = () => rect(0, 0, 100, 100)
+    const adapter = new TerminalGeometryAdapter()
+
+    expect(adapter.measure(host, { cursorX: 1, cursorY: 1, cols: 10, rows: 10 }, { width: Number.NaN, height: 10 })).toBeNull()
+    expect(adapter.measure(host, { cursorX: 1, cursorY: 1, cols: 10, rows: 10 }, { width: 10, height: Number.POSITIVE_INFINITY })).toBeNull()
 })

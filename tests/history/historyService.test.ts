@@ -13,6 +13,20 @@ function entry (command: string, useCount = 1): HistoryEntry {
     return { command, lastUsedAt: '2026-08-12T12:00:00.000Z', useCount }
 }
 
+function deferred<T> (): {
+    promise: Promise<T>
+    resolve: (value: T) => void
+    reject: (reason: unknown) => void
+} {
+    let resolve!: (value: T) => void
+    let reject!: (reason: unknown) => void
+    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise
+        reject = rejectPromise
+    })
+    return { promise, resolve, reject }
+}
+
 function fakeRepository (initial: Record<string, HistoryEntry[]> = {}): HistoryRepository & {
     load: jest.MockedFunction<HistoryRepository['load']>
     record: jest.MockedFunction<HistoryRepository['record']>
@@ -100,6 +114,157 @@ test('refreshes only an already loaded same-key cache on repository updates', as
     expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git switch'])
     expect((await service.query(identity('b'), 'git', defaults)).map(item => item.command)).toEqual(['git push'])
     expect(repository.load.mock.calls).toEqual([['a', 4096], ['b', 4096], ['a', 4096]])
+})
+
+test('retries an initial load after its current cached promise rejects', async () => {
+    const repository = fakeRepository()
+    repository.load.mockRejectedValueOnce(new Error('read failed')).mockResolvedValueOnce([entry('git recovered')])
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+
+    await expect(service.query(identity('a'), 'git', defaults)).rejects.toThrow('read failed')
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git recovered'])
+    expect(repository.load).toHaveBeenCalledTimes(2)
+})
+
+test('keeps a newer record cache when an older initial load rejects later', async () => {
+    const repository = fakeRepository()
+    const loading = deferred<HistoryEntry[]>()
+    repository.load.mockReturnValueOnce(loading.promise)
+    repository.record.mockResolvedValueOnce([entry('git recorded')])
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+
+    const staleQuery = service.query(identity('a'), 'git', defaults)
+    await service.record(
+        identity('a'),
+        'git recorded',
+        { trustworthy: true, visibleEcho: true },
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+    loading.reject(new Error('stale read failed'))
+
+    await expect(staleQuery).rejects.toThrow('stale read failed')
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git recorded'])
+    expect(repository.load).toHaveBeenCalledTimes(1)
+})
+
+test('keeps a newer record cache when an older initial load resolves later', async () => {
+    const repository = fakeRepository()
+    const loading = deferred<HistoryEntry[]>()
+    repository.load.mockReturnValueOnce(loading.promise)
+    repository.record.mockResolvedValueOnce([entry('git recorded')])
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+
+    const staleQuery = service.query(identity('a'), 'git', defaults)
+    await service.record(
+        identity('a'),
+        'git recorded',
+        { trustworthy: true, visibleEcho: true },
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+    loading.resolve([entry('git stale')])
+
+    expect((await staleQuery).map(item => item.command)).toEqual(['git stale'])
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git recorded'])
+    expect(repository.load).toHaveBeenCalledTimes(1)
+})
+
+test('does not let an older rejected refresh remove a newer record cache', async () => {
+    const repository = fakeRepository()
+    const refreshing = deferred<HistoryEntry[]>()
+    repository.load.mockResolvedValueOnce([entry('git before')]).mockReturnValueOnce(refreshing.promise)
+    repository.record.mockResolvedValueOnce([entry('git recorded')])
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    await service.query(identity('a'), 'git', defaults)
+    repository.publish('a')
+
+    const staleQuery = service.query(identity('a'), 'git', defaults)
+    await service.record(
+        identity('a'),
+        'git recorded',
+        { trustworthy: true, visibleEcho: true },
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+    refreshing.reject(new Error('stale refresh failed'))
+
+    await expect(staleQuery).rejects.toThrow('stale refresh failed')
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git recorded'])
+    expect(repository.load).toHaveBeenCalledTimes(2)
+})
+
+test('retries after a same-key refresh promise rejects', async () => {
+    const repository = fakeRepository()
+    repository.load
+        .mockResolvedValueOnce([entry('git before')])
+        .mockRejectedValueOnce(new Error('refresh failed'))
+        .mockResolvedValueOnce([entry('git after')])
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    await service.query(identity('a'), 'git', defaults)
+
+    repository.publish('a')
+
+    await expect(service.query(identity('a'), 'git', defaults)).rejects.toThrow('refresh failed')
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git after'])
+    expect(repository.load).toHaveBeenCalledTimes(3)
+})
+
+test('uses the capacity from the latest persistent query when refreshing a cached key', async () => {
+    const repository = fakeRepository({ a: [entry('git status')] })
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    await service.query(identity('a'), 'git', { ...defaults, capacity: 10 })
+    await service.query(identity('a'), 'git', { ...defaults, capacity: 20 })
+
+    repository.publish('a')
+    await service.query(identity('a'), 'git', { ...defaults, capacity: 20 })
+
+    expect(repository.load.mock.calls).toEqual([['a', 10], ['a', 20]])
+})
+
+test.each([
+    ['record then clear, record completes first', 'record-clear', 'record-clear', []],
+    ['record then clear, clear completes first', 'record-clear', 'clear-record', []],
+    ['clear then record, record completes first', 'clear-record', 'record-clear', ['git recorded']],
+    ['clear then record, clear completes first', 'clear-record', 'clear-record', ['git recorded']],
+] as const)('newer same-key mutation wins: %s', async (_name, invocationOrder, completionOrder, expected) => {
+    const repository = fakeRepository()
+    const recording = deferred<HistoryEntry[]>()
+    const clearing = deferred<void>()
+    repository.record.mockReturnValueOnce(recording.promise)
+    repository.clear.mockReturnValueOnce(clearing.promise)
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    const startRecord = () => service.record(
+        identity('a'),
+        'git recorded',
+        { trustworthy: true, visibleEcho: true },
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+    let recordPromise: Promise<void>
+    let clearPromise: Promise<void>
+
+    if (invocationOrder === 'record-clear') {
+        recordPromise = startRecord()
+        clearPromise = service.clear(identity('a'))
+    } else {
+        clearPromise = service.clear(identity('a'))
+        recordPromise = startRecord()
+    }
+
+    if (completionOrder === 'record-clear') {
+        recording.resolve([entry('git recorded')])
+        await recordPromise
+        clearing.resolve()
+    } else {
+        clearing.resolve()
+        await clearPromise
+        recording.resolve([entry('git recorded')])
+    }
+    await Promise.all([recordPromise, clearPromise])
+
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(expected)
+    expect(repository.load).not.toHaveBeenCalled()
 })
 
 test('keeps memory-only identities separate without accessing the repository', async () => {

@@ -53,12 +53,8 @@ export class PredictionOverlay {
         }
 
         const listVisible = state.mode === 'list' || (state.mode === 'hybrid' && state.expanded)
-        if (listVisible) {
-            this.renderList(state)
-        } else {
-            this.renderInline(state)
-        }
-        this.root.hidden = false
+        const rendered = listVisible ? this.renderList(state) : this.renderInline(state)
+        this.root.hidden = !rendered
     }
 
     hide (): void {
@@ -75,48 +71,62 @@ export class PredictionOverlay {
         this.root.remove()
     }
 
-    private renderInline (state: PredictionOverlayState): void {
+    private renderInline (state: PredictionOverlayState): boolean {
         const selectedIndex = clampIndex(state.selectedIndex, state.predictions.length)
         const selected = state.predictions[selectedIndex]
+        const matchIndex = clamp(
+            Number.isFinite(selected.matchIndex) ? Math.floor(selected.matchIndex) : 0,
+            0,
+            selected.command.length,
+        )
+        const suffixStart = clamp(matchIndex + state.query.length, 0, selected.command.length)
+        const remainder = selected.command.slice(suffixStart)
+        if (!remainder) {
+            return false
+        }
         const ghost = document.createElement('span')
         ghost.className = 'cmd-history-ghost'
-        ghost.dataset.command = selected.command
-        ghost.textContent = selected.command.startsWith(state.query)
-            ? selected.command.slice(state.query.length)
-            : selected.command
+        ghost.textContent = remainder
         this.root.setAttribute('role', 'status')
         this.root.setAttribute('aria-live', 'polite')
-        this.root.setAttribute('aria-label', selected.command)
+        this.root.setAttribute('aria-label', 'Command history prediction')
         this.root.removeAttribute('aria-activedescendant')
         this.root.append(ghost)
+        return true
     }
 
-    private renderList (state: PredictionOverlayState): void {
+    private renderList (state: PredictionOverlayState): boolean {
         const limit = normalizedLimit(state.maxResults, state.predictions.length)
-        const visible = state.predictions.slice(0, limit)
-        if (!visible.length) {
-            this.hide()
-            return
+        if (limit <= 0) {
+            return false
         }
-        const selectedIndex = clampIndex(state.selectedIndex, visible.length)
+        const selectedIndex = clampIndex(state.selectedIndex, state.predictions.length)
+        const windowSize = Math.min(limit, state.predictions.length)
+        const windowStart = clamp(
+            selectedIndex - Math.floor(windowSize / 2),
+            0,
+            state.predictions.length - windowSize,
+        )
+        const visible = state.predictions.slice(windowStart, windowStart + windowSize)
+        const localSelectedIndex = selectedIndex - windowStart
         this.root.setAttribute('role', 'listbox')
         this.root.setAttribute('aria-label', 'Command history predictions')
         this.root.removeAttribute('aria-live')
 
         visible.forEach((prediction, index) => {
             const row = document.createElement('div')
-            const selected = index === selectedIndex
+            const selected = index === localSelectedIndex
             row.id = `${this.optionIdPrefix}-${index}`
             row.className = `cmd-history-option${selected ? ' is-selected' : ''}`
             row.setAttribute('role', 'option')
             row.setAttribute('aria-selected', String(selected))
-            row.dataset.command = prediction.command
             row.textContent = prediction.command
             this.root.append(row)
             if (selected) {
                 this.root.setAttribute('aria-activedescendant', row.id)
             }
         })
+        return true
     }
 
     private applyPosition (position: PredictionOverlayPosition): void {
@@ -135,6 +145,10 @@ function normalizedLimit (limit: number | undefined, fallback: number): number {
 
 function clampIndex (index: number, length: number): number {
     return Math.min(Math.max(Number.isFinite(index) ? Math.floor(index) : 0, 0), length - 1)
+}
+
+function clamp (value: number, minimum: number, maximum: number): number {
+    return Math.min(Math.max(value, minimum), maximum)
 }
 
 function setOptionalPixelStyle (

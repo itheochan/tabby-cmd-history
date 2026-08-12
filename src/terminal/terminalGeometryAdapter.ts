@@ -29,11 +29,11 @@ export class TerminalGeometryAdapter {
             return null
         }
 
+        const hostBounds = host.getBoundingClientRect()
         const screenBounds = screen.getBoundingClientRect()
-        if (screenBounds.width <= 0 || screenBounds.height <= 0) {
+        if (!validRect(hostBounds) || !validRect(screenBounds)) {
             return null
         }
-        const hostBounds = host.getBoundingClientRect()
         const cellWidth = screenBounds.width / metrics.cols
         const cellHeight = screenBounds.height / metrics.rows
         const column = clamp(Math.floor(metrics.cursorX), 0, metrics.cols - 1)
@@ -43,6 +43,9 @@ export class TerminalGeometryAdapter {
         const cursorBottom = cursorTop + cellHeight
         const spaceAbove = Math.max(0, cursorTop - screenBounds.top)
         const spaceBelow = Math.max(0, screenBounds.bottom - cursorBottom)
+        if (![cellWidth, cellHeight, cursorLeft, cursorTop, cursorBottom, spaceAbove, spaceBelow].every(Number.isFinite)) {
+            return null
+        }
         const above = spaceBelow < overlay.height && spaceAbove > 0
         const availableHeight = above ? spaceAbove : spaceBelow
         const maxHeight = Math.min(overlay.height, availableHeight)
@@ -53,10 +56,15 @@ export class TerminalGeometryAdapter {
         const maxWidth = Math.min(overlay.width, screenBounds.width)
         const absoluteLeft = clamp(cursorLeft, screenBounds.left, screenBounds.right - maxWidth)
         const absoluteTop = above ? cursorTop - maxHeight : cursorBottom
+        const left = absoluteLeft - hostBounds.left
+        const top = clamp(absoluteTop, screenBounds.top, screenBounds.bottom - maxHeight) - hostBounds.top
+        if (![maxWidth, maxHeight, absoluteLeft, absoluteTop, left, top].every(Number.isFinite)) {
+            return null
+        }
 
         return {
-            left: absoluteLeft - hostBounds.left,
-            top: clamp(absoluteTop, screenBounds.top, screenBounds.bottom - maxHeight) - hostBounds.top,
+            left,
+            top,
             above,
             maxWidth,
             maxHeight,
@@ -72,6 +80,11 @@ function validMetrics (metrics: TerminalViewportMetrics): boolean {
 
 function validSize (size: OverlaySize): boolean {
     return Number.isFinite(size.width) && size.width > 0 && Number.isFinite(size.height) && size.height > 0
+}
+
+function validRect (bounds: DOMRect): boolean {
+    return [bounds.left, bounds.top, bounds.right, bounds.bottom, bounds.width, bounds.height].every(Number.isFinite) &&
+        bounds.width > 0 && bounds.height > 0 && bounds.right > bounds.left && bounds.bottom > bounds.top
 }
 
 function clamp (value: number, minimum: number, maximum: number): number {

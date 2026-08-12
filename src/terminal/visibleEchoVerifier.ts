@@ -1,18 +1,19 @@
-import { normalizeCommand } from '../history/commandPolicy'
-
 export class VisibleEchoVerifier {
-    matches (recentLogicalLines: readonly string[] | null | undefined, command: string): boolean {
-        if (!recentLogicalLines?.length) {
+    /**
+     * Compares only the complete current cursor logical rows captured before Enter is forwarded.
+     * The caller must fail closed rather than pass output history, wrapped fragments, or partial rows.
+     */
+    matches (currentLogicalLines: readonly string[] | null | undefined, command: string): boolean {
+        if (!currentLogicalLines?.length || currentLogicalLines.some(line => /[\r\n]/u.test(line))) {
             return false
         }
 
-        const normalizedCommand = normalizeCommand(command)
-        if (!normalizedCommand) {
+        const commandLines = normalizeNewlines(command).split('\n').map(trimLineEnd)
+        if (commandLines.every(line => !line)) {
             return false
         }
 
-        const commandLines = normalizedCommand.split('\n').map(trimLineEnd)
-        const visibleLines = recentLogicalLines.flatMap(line => normalizeNewlines(line).split('\n')).map(trimLineEnd)
+        const visibleLines = currentLogicalLines.map(trimLineEnd)
         if (visibleLines.length < commandLines.length) {
             return false
         }

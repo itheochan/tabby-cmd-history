@@ -19,6 +19,7 @@ export interface CaptureEvidence {
 export class HistoryService {
     private readonly persistentEntries = new Map<string, Promise<HistoryEntry[]>>()
     private readonly persistentCapacities = new Map<string, number>()
+    private readonly persistentGenerations = new Map<string, number>()
     private readonly memoryEntries = new Map<string, HistoryEntry[]>()
 
     constructor (
@@ -35,9 +36,13 @@ export class HistoryService {
         config: CommandHistoryConfig,
         now = new Date(),
     ): Promise<Prediction[]> {
-        const entries = identity.persistent
-            ? await this.persistentEntriesFor(identity.key, config.capacity)
-            : this.memoryEntries.get(identity.key) ?? []
+        let entries: readonly HistoryEntry[]
+        if (identity.persistent) {
+            this.persistentCapacities.set(identity.key, config.capacity)
+            entries = await this.persistentEntriesFor(identity.key, config.capacity)
+        } else {
+            entries = this.memoryEntries.get(identity.key) ?? []
+        }
         return this.matcher.query(entries, query, config, now)
     }
 
@@ -71,8 +76,12 @@ export class HistoryService {
         }
 
         this.persistentCapacities.set(identity.key, config.capacity)
-        const updated = await this.repository.record(identity.key, normalized, at, config.capacity)
-        this.persistentEntries.set(identity.key, Promise.resolve(copyEntries(updated)))
+        const generation = this.nextGeneration(identity.key)
+        await this.installPersistent(
+            identity.key,
+            generation,
+            this.repository.record(identity.key, normalized, at, config.capacity),
+        )
     }
 
     async clear (identity: ConnectionIdentity): Promise<void> {
@@ -81,8 +90,12 @@ export class HistoryService {
             return
         }
 
-        await this.repository.clear(identity.key)
-        this.persistentEntries.set(identity.key, Promise.resolve([]))
+        const generation = this.nextGeneration(identity.key)
+        await this.installPersistent(
+            identity.key,
+            generation,
+            this.repository.clear(identity.key).then(() => []),
+        )
     }
 
     private persistentEntriesFor (key: string, capacity: number): Promise<HistoryEntry[]> {
@@ -91,10 +104,8 @@ export class HistoryService {
             return cached
         }
 
-        this.persistentCapacities.set(key, capacity)
-        const loaded = this.repository.load(key, capacity).then(copyEntries)
-        this.persistentEntries.set(key, loaded)
-        return loaded
+        const generation = this.nextGeneration(key)
+        return this.installPersistent(key, generation, this.repository.load(key, capacity))
     }
 
     private refreshPersistentKey (key: string): void {
@@ -105,7 +116,32 @@ export class HistoryService {
         if (capacity === undefined) {
             return
         }
-        this.persistentEntries.set(key, this.repository.load(key, capacity).then(copyEntries))
+        const generation = this.nextGeneration(key)
+        const refreshing = this.installPersistent(key, generation, this.repository.load(key, capacity))
+        void refreshing.catch(() => undefined)
+    }
+
+    private nextGeneration (key: string): number {
+        const generation = (this.persistentGenerations.get(key) ?? 0) + 1
+        this.persistentGenerations.set(key, generation)
+        return generation
+    }
+
+    private installPersistent (
+        key: string,
+        generation: number,
+        source: Promise<HistoryEntry[]>,
+    ): Promise<HistoryEntry[]> {
+        const installed = source.then(copyEntries).catch(error => {
+            if (this.persistentGenerations.get(key) === generation && this.persistentEntries.get(key) === installed) {
+                this.persistentEntries.delete(key)
+            }
+            throw error
+        })
+        if (this.persistentGenerations.get(key) === generation) {
+            this.persistentEntries.set(key, installed)
+        }
+        return installed
     }
 }
 
