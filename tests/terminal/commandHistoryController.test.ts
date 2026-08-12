@@ -4,6 +4,7 @@ import { SensitiveCommandFilter } from '../../src/history/commandPolicy'
 import { HistoryMatcher } from '../../src/history/historyMatcher'
 import { HistoryRepository, HistoryService } from '../../src/history/historyService'
 import { Prediction } from '../../src/history/types'
+import { TerminalGeometryAdapter } from '../../src/terminal/terminalGeometryAdapter'
 import { PredictionOverlay } from '../../src/ui/predictionOverlay'
 import {
     CommandHistoryController,
@@ -37,6 +38,8 @@ interface FakeLine {
 class FakeFrontend {
     readonly contentUpdated$ = new Subject<void>()
     readonly destroyed$ = new Subject<void>()
+    readonly resize$ = new Subject<{ columns: number; rows: number }>()
+    readonly alternateScreenActive$ = new Subject<boolean>()
     bracketedPaste = true
     lines: FakeLine[] = [{ isWrapped: false, translateToString: () => '' }]
     xterm = {
@@ -60,13 +63,25 @@ class FakeFrontend {
 class FakeTerminal {
     profile = { id: 'profile-1', type: 'local', name: 'PowerShell', options: {} }
     session: FakeSession | null = new FakeSession()
-    frontend = new FakeFrontend()
+    frontend: FakeFrontend | undefined = new FakeFrontend()
     alternateScreenActive = false
     readonly sessionChanged$ = new Subject<FakeSession | null>()
     readonly frontendReady$ = new Subject<void>()
-    readonly resize$ = new Subject<{ columns: number; rows: number }>()
-    readonly alternateScreenActive$ = new Subject<boolean>()
     readonly element = { nativeElement: document.createElement('div') }
+
+    get resize$ (): Subject<{ columns: number; rows: number }> {
+        if (!this.frontend) {
+            throw new Error('Frontend not ready')
+        }
+        return this.frontend.resize$
+    }
+
+    get alternateScreenActive$ (): Subject<boolean> {
+        if (!this.frontend) {
+            throw new Error('Frontend not ready')
+        }
+        return this.frontend.alternateScreenActive$
+    }
 
     constructor () {
         const screen = document.createElement('div')
@@ -83,6 +98,18 @@ class FakeTerminal {
     replaceSession (session: FakeSession | null): void {
         this.session = session
         this.sessionChanged$.next(session)
+    }
+
+    replaceFrontend (frontend: FakeFrontend | undefined): void {
+        this.frontend = frontend
+        if (frontend) {
+            this.frontendReady$.next()
+        }
+    }
+
+    emitAlternate (active: boolean): void {
+        this.alternateScreenActive = active
+        this.alternateScreenActive$.next(active)
     }
 }
 
@@ -102,8 +129,8 @@ function config (): CommandHistoryConfig {
 function createFixture (
     commands: string[] = [],
     overrides: Partial<CommandHistoryControllerDependencies> = {},
+    terminal = new FakeTerminal(),
 ) {
-    const terminal = new FakeTerminal()
     let currentConfig = config()
     const changed$ = new Subject<void>()
     const logs: string[] = []
@@ -234,11 +261,11 @@ describe('CommandHistoryController', () => {
 
     test('captures complete current cursor logical rows before forwarding Enter', async () => {
         const fixture = createFixture()
-        fixture.terminal.frontend.lines = [
+        fixture.terminal.frontend!.lines = [
             { isWrapped: false, translateToString: () => 'PS> echo vis' },
             { isWrapped: true, translateToString: () => 'ible' },
         ]
-        fixture.terminal.frontend.xterm.buffer.active.cursorY = 1
+        fixture.terminal.frontend!.xterm.buffer.active.cursorY = 1
         fixture.terminal.send('echo visible')
         fixture.terminal.send(Buffer.from([0x0d]))
         await settle()
@@ -255,7 +282,7 @@ describe('CommandHistoryController', () => {
 
     test('Ctrl+C cancels an Enter record that has not started', async () => {
         const fixture = createFixture()
-        fixture.terminal.frontend.lines = [
+        fixture.terminal.frontend!.lines = [
             { isWrapped: false, translateToString: () => 'PS> echo queued' },
         ]
         fixture.terminal.send('echo queued')
@@ -268,11 +295,11 @@ describe('CommandHistoryController', () => {
 
     test('fails strict echo closed instead of passing recent output', async () => {
         const fixture = createFixture()
-        fixture.terminal.frontend.lines = [
+        fixture.terminal.frontend!.lines = [
             { isWrapped: false, translateToString: () => 'echo hidden' },
             { isWrapped: false, translateToString: () => 'Password:' },
         ]
-        fixture.terminal.frontend.xterm.buffer.active.cursorY = 1
+        fixture.terminal.frontend!.xterm.buffer.active.cursorY = 1
         fixture.terminal.send('hunter2')
         fixture.terminal.send('\r')
         await settle()
@@ -295,7 +322,7 @@ describe('CommandHistoryController', () => {
         }
         const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
         const fixture = createFixture([], { history: service })
-        fixture.terminal.frontend.lines = [
+        fixture.terminal.frontend!.lines = [
             { isWrapped: false, translateToString: () => 'Password:' },
         ]
         fixture.terminal.send('hunter2')
@@ -319,16 +346,36 @@ describe('CommandHistoryController', () => {
         expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['git status'])
     })
 
+    test('clears active predictions synchronously while a newer text query is pending', async () => {
+        const fixture = createFixture(['git checkout'])
+        fixture.terminal.send('git')
+        await settle()
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['git checkout'])
+
+        let resolveCurrent!: (value: Prediction[]) => void
+        fixture.history.query.mockImplementationOnce(() => new Promise(resolve => { resolveCurrent = resolve }))
+        fixture.terminal.send('x')
+        expect(fixture.controller.state().predictions).toEqual([])
+        expect((fixture.terminal.element.nativeElement.querySelector('.cmd-history-overlay') as HTMLElement).hidden).toBe(true)
+
+        await Promise.resolve()
+        fixture.terminal.send('\x1b[C')
+        expect(fixture.bytes()).toEqual(Buffer.from('gitx\x1b[C'))
+        resolveCurrent([prediction('gitx result')])
+        await settle()
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['gitx result'])
+    })
+
     test('alternate screen and disabled config are raw pass-through and reset capture', async () => {
         const fixture = createFixture(['git status'])
         fixture.terminal.send('git')
         await settle()
-        fixture.terminal.alternateScreenActive$.next(true)
+        fixture.terminal.emitAlternate(true)
         fixture.terminal.send(':q')
         expect(fixture.controller.state().buffer.text).toBe('')
         expect(fixture.bytes().toString()).toBe('git:q')
 
-        fixture.terminal.alternateScreenActive$.next(false)
+        fixture.terminal.emitAlternate(false)
         fixture.changeConfig({ enabled: false })
         fixture.terminal.send('pwd')
         expect(fixture.controller.state().buffer.text).toBe('')
@@ -371,7 +418,7 @@ describe('CommandHistoryController', () => {
 
     test('filters multiline candidates unless bracketed paste is supported', async () => {
         const fixture = createFixture(['echo one\necho two', 'echo safe'])
-        fixture.terminal.frontend.bracketedPaste = false
+        fixture.terminal.frontend!.bracketedPaste = false
         fixture.terminal.send('echo')
         await settle()
         expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['echo safe'])
@@ -395,8 +442,8 @@ describe('CommandHistoryController', () => {
         const old = fixture.terminal.session!
         const replacement = new FakeSession()
         fixture.terminal.replaceSession(replacement)
-        expect(old.middleware.entries).toHaveLength(0)
-        expect(replacement.middleware.entries).toHaveLength(1)
+        expect(old.middleware.entries).toHaveLength(1)
+        expect(replacement.middleware.entries).toHaveLength(2)
         fixture.terminal.send('new')
         expect(Buffer.concat(replacement.bytes).toString()).toBe('new')
     })
@@ -413,11 +460,54 @@ describe('CommandHistoryController', () => {
 
     test('session replacement does not duplicate frontend subscriptions', () => {
         const fixture = createFixture()
-        expect(fixture.terminal.frontend.contentUpdated$.observers).toHaveLength(1)
+        expect(fixture.terminal.frontend!.contentUpdated$.observers).toHaveLength(1)
         fixture.terminal.replaceSession(new FakeSession())
-        expect(fixture.terminal.frontend.contentUpdated$.observers).toHaveLength(1)
+        expect(fixture.terminal.frontend!.contentUpdated$.observers).toHaveLength(1)
         fixture.controller.destroy()
-        expect(fixture.terminal.frontend.contentUpdated$.observers).toHaveLength(0)
+        expect(fixture.terminal.frontend!.contentUpdated$.observers).toHaveLength(0)
+    })
+
+    test('stays raw until a delayed frontend arrives, then binds resize and alternate lifecycle', async () => {
+        const terminal = new FakeTerminal()
+        const frontend = terminal.frontend!
+        terminal.frontend = undefined
+        const measure = jest.fn(() => ({ left: 0, top: 20, above: false, maxWidth: 80, maxHeight: 40 }))
+        const fixture = createFixture(['git status'], {
+            geometry: { measure } as unknown as TerminalGeometryAdapter,
+        }, terminal)
+
+        terminal.send('raw')
+        expect(fixture.bytes().toString()).toBe('raw')
+        expect(fixture.controller.state().buffer.text).toBe('')
+
+        terminal.replaceFrontend(frontend)
+        terminal.send('git')
+        await settle()
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['git status'])
+        expect(measure).toHaveBeenCalledTimes(1)
+        frontend.resize$.next({ columns: 100, rows: 30 })
+        expect(measure).toHaveBeenCalledTimes(2)
+        terminal.emitAlternate(true)
+        terminal.send(':q')
+        expect(fixture.controller.state().predictions).toEqual([])
+        expect(fixture.bytes().toString()).toBe('rawgit:q')
+        terminal.emitAlternate(false)
+    })
+
+    test('rebinds frontend lifecycle subscriptions when the frontend object changes', () => {
+        const fixture = createFixture()
+        const original = fixture.terminal.frontend!
+        const replacement = new FakeFrontend()
+        expect(original.resize$.observers).toHaveLength(1)
+        expect(original.alternateScreenActive$.observers).toHaveLength(1)
+
+        fixture.terminal.replaceFrontend(replacement)
+        expect(original.contentUpdated$.observers).toHaveLength(0)
+        expect(original.resize$.observers).toHaveLength(0)
+        expect(original.alternateScreenActive$.observers).toHaveLength(0)
+        expect(replacement.contentUpdated$.observers).toHaveLength(1)
+        expect(replacement.resize$.observers).toHaveLength(1)
+        expect(replacement.alternateScreenActive$.observers).toHaveLength(1)
     })
 
     test('callback failures remain fail-open and logs contain stage and key but no command', async () => {
@@ -438,7 +528,7 @@ describe('CommandHistoryController', () => {
         fixture.history.record.mockImplementation(() => {
             throw new Error('echo do-not-log-this')
         })
-        fixture.terminal.frontend.lines = [
+        fixture.terminal.frontend!.lines = [
             { isWrapped: false, translateToString: () => 'PS> echo do-not-log-this' },
         ]
         fixture.terminal.send('echo do-not-log-this')
@@ -464,6 +554,38 @@ describe('CommandHistoryController', () => {
         expect(fixture.bytes().toString()).toBe('safe')
         expect(fixture.controller.state().predictions).toEqual([])
         expect(fixture.logs.join('\n')).toContain('overlay-render')
+        expect(fixture.logs.join('\n')).not.toContain('safe command')
+    })
+
+    test('overlay factory failure keeps candidate shortcuts raw and command-free', async () => {
+        const fixture = createFixture(['safe command'], {
+            createOverlay: () => { throw new Error('safe command') },
+        })
+        fixture.terminal.send('safe')
+        await settle()
+        fixture.terminal.send('\x1b[A')
+        fixture.terminal.send('\x1b[C')
+        expect(fixture.controller.state().predictions).toEqual([])
+        expect(fixture.bytes()).toEqual(Buffer.from('safe\x1b[A\x1b[C'))
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-overlay')).toBeNull()
+        expect(fixture.logs.join('\n')).toContain('overlay-create')
+        expect(fixture.logs.join('\n')).not.toContain('safe command')
+    })
+
+    test('geometry failure disables presentation and keeps candidate shortcuts raw', async () => {
+        const fixture = createFixture(['safe command'], {
+            geometry: {
+                measure: () => { throw new Error('safe command') },
+            } as TerminalGeometryAdapter,
+        })
+        fixture.terminal.send('safe')
+        await settle()
+        fixture.terminal.send('\x1b[A')
+        fixture.terminal.send('\x1b[C')
+        expect(fixture.controller.state().predictions).toEqual([])
+        expect(fixture.bytes()).toEqual(Buffer.from('safe\x1b[A\x1b[C'))
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-overlay')).toBeNull()
+        expect(fixture.logs.join('\n')).toContain('geometry-measure')
         expect(fixture.logs.join('\n')).not.toContain('safe command')
     })
 })

@@ -30,6 +30,11 @@ export class SessionMiddlewareStack extends SessionMiddleware {
     readonly entries: SessionMiddleware[] = []
     private links: Subscription[] = []
 
+    constructor () {
+        super()
+        this.push(new SessionMiddleware())
+    }
+
     push (middleware: SessionMiddleware): void {
         this.entries.push(middleware)
         this.relink()
@@ -49,11 +54,11 @@ export class SessionMiddlewareStack extends SessionMiddleware {
     }
 
     override feedFromTerminal (data: Buffer): void {
-        if (this.entries.length) {
-            this.entries[0].feedFromTerminal(data)
-        } else {
-            super.feedFromTerminal(data)
-        }
+        this.entries[this.entries.length - 1].feedFromTerminal(data)
+    }
+
+    override feedFromSession (data: Buffer): void {
+        this.entries[0].feedFromSession(data)
     }
 
     override close (): void {
@@ -66,16 +71,22 @@ export class SessionMiddlewareStack extends SessionMiddleware {
     private relink (): void {
         this.links.forEach(link => link.unsubscribe())
         this.links = []
-        this.entries.forEach((entry, index) => {
-            this.links.push(entry.outputToSession$.subscribe(data => {
-                const next = this.entries[index + 1]
-                if (next) {
-                    next.feedFromTerminal(data)
-                } else {
-                    this.outputToSession.next(data)
-                }
+        for (let index = 0; index < this.entries.length - 1; index++) {
+            this.links.push(this.entries[index].outputToTerminal$.subscribe(data => {
+                this.entries[index + 1].feedFromSession(data)
             }))
-        })
+        }
+        this.links.push(this.entries[this.entries.length - 1].outputToTerminal$.subscribe(data => {
+            this.outputToTerminal.next(data)
+        }))
+        for (let index = this.entries.length - 2; index >= 0; index--) {
+            this.links.push(this.entries[index + 1].outputToSession$.subscribe(data => {
+                this.entries[index].feedFromTerminal(data)
+            }))
+        }
+        this.links.push(this.entries[0].outputToSession$.subscribe(data => {
+            this.outputToSession.next(data)
+        }))
     }
 }
 
@@ -85,6 +96,24 @@ export class BaseSession {
 
 export class BaseTerminalTabComponent<P> {
     profile!: P
+    frontend?: {
+        resize$: Observable<unknown>
+        alternateScreenActive$: Observable<boolean>
+    }
+
+    get resize$ (): Observable<unknown> {
+        if (!this.frontend) {
+            throw new Error('Frontend not ready')
+        }
+        return this.frontend.resize$
+    }
+
+    get alternateScreenActive$ (): Observable<boolean> {
+        if (!this.frontend) {
+            throw new Error('Frontend not ready')
+        }
+        return this.frontend.alternateScreenActive$
+    }
 }
 
 export class TerminalDecorator {

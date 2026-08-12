@@ -130,7 +130,6 @@ export class CommandHistoryController {
         this.attachTerminalSubscriptions()
         this.attachFrontend()
         this.attachSession(this.terminal.session)
-        this.setAlternate(this.terminal.alternateScreenActive === true)
     }
 
     destroy (): void {
@@ -206,17 +205,20 @@ export class CommandHistoryController {
             return { consume: false, action }
         }
 
+        const before = this.buffer.snapshot()
         this.buffer.apply(action as EditAction)
-        this.refreshPosition()
-        this.queryFromBuffer()
+        const after = this.buffer.snapshot()
+        if (after.text !== before.text || after.confident !== before.confident || after.dismissed !== before.dismissed) {
+            this.queryFromBuffer()
+        } else {
+            this.refreshPosition()
+        }
         return { consume: false, action }
     }
 
     private attachTerminalSubscriptions (): void {
         this.subscribe(this.terminal.sessionChanged$, session => this.handleSessionChanged(session))
         this.subscribe(this.terminal.frontendReady$, () => this.handleFrontendReady())
-        this.subscribe(this.terminal.resize$, () => this.refreshPosition())
-        this.subscribe(this.terminal.alternateScreenActive$, active => this.setAlternate(active))
         if (this.dependencies.configChanged$) {
             this.subscribe(this.dependencies.configChanged$, () => this.handleConfigChanged())
         }
@@ -298,22 +300,45 @@ export class CommandHistoryController {
             this.invalidatePredictions()
             return
         }
-        if (frontend.contentUpdated$) {
-            this.frontendSubscriptions.push(frontend.contentUpdated$.subscribe(() => this.refreshPosition()))
+        try {
+            this.subscribeFrontend(this.terminal.resize$, () => this.refreshPosition())
+            this.subscribeFrontend(this.terminal.alternateScreenActive$, active => this.setAlternate(active))
+            if (frontend.contentUpdated$) {
+                this.subscribeFrontend(frontend.contentUpdated$, () => this.refreshPosition())
+            }
+            if (frontend.destroyed$) {
+                this.subscribeFrontend(frontend.destroyed$, () => {
+                    this.frontendAvailable = false
+                    this.invalidatePredictions()
+                    this.buffer.reset()
+                    this.detachFrontend()
+                })
+            }
+            this.addFrontendDisposable(frontend.xterm.onScroll?.(() => this.refreshPosition()))
+            this.addFrontendDisposable(frontend.xterm.onSelectionChange?.(() => this.refreshPosition()))
+            this.setAlternate(this.terminal.alternateScreenActive === true)
+        } catch {
+            this.warn('frontend-bind')
+            this.detachFrontend()
+            this.invalidatePredictions()
         }
-        if (frontend.destroyed$) {
-            this.frontendSubscriptions.push(frontend.destroyed$.subscribe(() => {
+    }
+
+    private subscribeFrontend<T> (observable: Observable<T>, handler: (value: T) => void): void {
+        this.frontendSubscriptions.push(observable.subscribe(value => {
+            try {
+                handler(value)
+            } catch {
+                this.warn('frontend-event')
                 this.frontendAvailable = false
                 this.invalidatePredictions()
-                this.buffer.reset()
                 this.detachFrontend()
-            }))
-        }
-        this.addFrontendDisposable(frontend.xterm.onScroll?.(() => this.refreshPosition()))
-        this.addFrontendDisposable(frontend.xterm.onSelectionChange?.(() => this.refreshPosition()))
+            }
+        }))
     }
 
     private detachFrontend (): void {
+        this.frontendAvailable = false
         this.frontendSubscriptions.splice(0).forEach(subscription => subscription.unsubscribe())
         this.frontendDisposables.splice(0).forEach(disposable => {
             try {
@@ -366,19 +391,23 @@ export class CommandHistoryController {
 
     private queryFromBuffer (): void {
         const state = this.buffer.snapshot()
+        this.invalidatePredictions()
         if (!this.config.enabled || this.alternateActive || !this.frontendAvailable ||
             !state.confident || state.dismissed || state.text.trim().length < this.config.minQueryLength) {
-            this.invalidatePredictions()
             return
         }
 
-        const generation = ++this.queryGeneration
+        const generation = this.queryGeneration
         const identity = this.identity
         const config = cloneConfig(this.config)
         Promise.resolve()
             .then(() => this.dependencies.history.query(identity, state.text, config, this.now()))
             .then(predictions => {
                 if (generation !== this.queryGeneration || this.destroyed) {
+                    return
+                }
+                if (!this.overlay) {
+                    this.invalidatePredictions()
                     return
                 }
                 const supportsMultiline = this.supportsBracketedPaste()
@@ -514,31 +543,36 @@ export class CommandHistoryController {
 
     private renderPredictions (): void {
         if (!this.predictions.length || !this.overlay) {
-            this.hideOverlay()
-            return
-        }
-        const frontend = this.frontend()
-        if (!frontend) {
-            this.invalidatePredictions()
-            return
-        }
-        const active = frontend.xterm.buffer.active
-        const position = this.geometry.measure(
-            this.host(),
-            {
-                cursorX: active.cursorX,
-                cursorY: active.cursorY,
-                cols: frontend.xterm.cols,
-                rows: frontend.xterm.rows,
-            },
-            { width: 480, height: Math.max(24, this.config.maxVisible * 28) },
-        )
-        if (!position) {
             this.predictions = []
+            this.selectedIndex = 0
+            this.expanded = false
             this.hideOverlay()
             return
         }
+        let stage = 'frontend-measure'
         try {
+            const frontend = this.frontend()
+            if (!frontend) {
+                this.disablePresentation('frontend-measure')
+                return
+            }
+            const active = frontend.xterm.buffer.active
+            stage = 'geometry-measure'
+            const position = this.geometry.measure(
+                this.host(),
+                {
+                    cursorX: active.cursorX,
+                    cursorY: active.cursorY,
+                    cols: frontend.xterm.cols,
+                    rows: frontend.xterm.rows,
+                },
+                { width: 480, height: Math.max(24, this.config.maxVisible * 28) },
+            )
+            if (!position) {
+                this.invalidatePredictions()
+                return
+            }
+            stage = 'overlay-render'
             this.overlay.render({
                 mode: this.config.presentation,
                 query: this.buffer.snapshot().text,
@@ -549,8 +583,7 @@ export class CommandHistoryController {
                 position,
             })
         } catch {
-            this.predictions = []
-            this.destroyOverlay('overlay-render')
+            this.disablePresentation(stage)
         }
     }
 
@@ -593,6 +626,14 @@ export class CommandHistoryController {
         }
         this.overlay = undefined
         this.warn(stage)
+    }
+
+    private disablePresentation (stage: string): void {
+        this.queryGeneration++
+        this.predictions = []
+        this.selectedIndex = 0
+        this.expanded = false
+        this.destroyOverlay(stage)
     }
 
     private frontend (): FrontendFacade | null {
