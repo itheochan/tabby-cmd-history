@@ -1,4 +1,4 @@
-import { Observable } from 'rxjs'
+import { Observable, Subject } from 'rxjs'
 import { CommandHistoryConfig } from '../config/historyConfig'
 import { normalizeCommand, SensitiveCommandFilter } from './commandPolicy'
 import { HistoryMatcher } from './historyMatcher'
@@ -17,16 +17,20 @@ export interface CaptureEvidence {
 }
 
 export class HistoryService {
+    readonly changes$: Observable<string>
+
     private readonly persistentEntries = new Map<string, Promise<HistoryEntry[]>>()
     private readonly persistentCapacities = new Map<string, number>()
     private readonly persistentGenerations = new Map<string, number>()
     private readonly memoryEntries = new Map<string, HistoryEntry[]>()
+    private readonly changesSubject = new Subject<string>()
 
     constructor (
         private readonly repository: HistoryRepository,
         private readonly matcher: HistoryMatcher,
         private readonly sensitiveFilter: SensitiveCommandFilter,
     ) {
+        this.changes$ = this.changesSubject.asObservable()
         repository.updates$.subscribe(key => this.refreshPersistentKey(key))
     }
 
@@ -73,6 +77,7 @@ export class HistoryService {
                 at,
                 config.capacity,
             ))
+            this.changesSubject.next(identity.key)
             return
         }
 
@@ -82,21 +87,33 @@ export class HistoryService {
             identity.key,
             generation,
             this.repository.record(identity.key, normalized, at, config.capacity),
+            true,
         )
     }
 
     async clear (identity: ConnectionIdentity): Promise<void> {
         if (!identity.persistent) {
-            this.memoryEntries.delete(identity.key)
+            if (this.memoryEntries.delete(identity.key)) {
+                this.changesSubject.next(identity.key)
+            }
             return
         }
 
+        const previous = this.persistentEntries.get(identity.key)
         const generation = this.nextGeneration(identity.key)
-        await this.installPersistent(
-            identity.key,
-            generation,
-            this.repository.clear(identity.key).then(() => []),
-        )
+        try {
+            await this.installPersistent(
+                identity.key,
+                generation,
+                this.repository.clear(identity.key).then(() => []),
+                true,
+            )
+        } catch (error) {
+            if (previous && this.persistentGenerations.get(identity.key) === generation) {
+                this.persistentEntries.set(identity.key, previous)
+            }
+            throw error
+        }
     }
 
     private persistentEntriesFor (key: string, capacity: number): Promise<HistoryEntry[]> {
@@ -118,7 +135,7 @@ export class HistoryService {
             return
         }
         const generation = this.nextGeneration(key)
-        const refreshing = this.installPersistent(key, generation, this.repository.load(key, capacity))
+        const refreshing = this.installPersistent(key, generation, this.repository.load(key, capacity), true)
         void refreshing.catch(() => undefined)
     }
 
@@ -132,8 +149,16 @@ export class HistoryService {
         key: string,
         generation: number,
         source: Promise<HistoryEntry[]>,
+        publish = false,
     ): Promise<HistoryEntry[]> {
-        const installed = source.then(copyEntries).catch(error => {
+        const installed = source.then(entries => {
+            const copied = copyEntries(entries)
+            if (publish && this.persistentGenerations.get(key) === generation &&
+                this.persistentEntries.get(key) === installed) {
+                this.changesSubject.next(key)
+            }
+            return copied
+        }).catch(error => {
             if (this.persistentGenerations.get(key) === generation && this.persistentEntries.get(key) === installed) {
                 this.persistentEntries.delete(key)
             }

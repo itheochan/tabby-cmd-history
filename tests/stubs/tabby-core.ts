@@ -23,13 +23,18 @@ export class ConfigService {
 
 export class AppService {
     activeTab: unknown = null
+    tabs: unknown[] = []
 }
 
 export class SplitTabComponent {
-    constructor (private readonly focusedTab: unknown = null) {}
+    constructor (private readonly focusedTab: unknown = null, private readonly tabs: unknown[] = []) {}
 
     getFocusedTab (): unknown {
         return this.focusedTab
+    }
+
+    getAllTabs (): unknown[] {
+        return this.tabs.length ? [...this.tabs] : (this.focusedTab ? [this.focusedTab] : [])
     }
 }
 

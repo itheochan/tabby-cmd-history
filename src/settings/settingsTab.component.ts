@@ -1,4 +1,5 @@
 import { Component } from '@angular/core'
+import { homedir } from 'node:os'
 import { AppService, ConfigService, PlatformService, SplitTabComponent } from 'tabby-core'
 import { BaseTerminalProfile, BaseTerminalTabComponent } from 'tabby-terminal'
 import {
@@ -7,9 +8,15 @@ import {
     HistoryKeyName,
     validateHistoryConfig,
 } from '../config/historyConfig'
-import { ConnectionIdentityResolver, ProfileLike } from '../history/connectionIdentity'
+import { compileExclusionPatterns } from '../history/commandPolicy'
+import {
+    ConnectionIdentityResolver,
+    normalizeHistoryDataRoot,
+    ProfileLike,
+} from '../history/connectionIdentity'
 import { HistoryService } from '../history/historyService'
 import { ConnectionIdentity } from '../history/types'
+import { ActiveTerminalTracker } from '../terminal/activeTerminalTracker'
 
 if (process.env.NODE_ENV !== 'test') {
     // Webpack bundles the settings stylesheet; Jest exercises the component contract without loading Sass.
@@ -58,6 +65,7 @@ export class CommandHistorySettingsTabComponent {
         private readonly platform: PlatformService,
         private readonly identityResolver: ConnectionIdentityResolver,
         private readonly history: HistoryService,
+        private readonly activeTerminalTracker: ActiveTerminalTracker,
     ) {
         this.draft = cloneConfig(this.currentConfig())
         this.exclusionText = this.draft.exclusionPatterns.join('\n')
@@ -81,10 +89,10 @@ export class CommandHistorySettingsTabComponent {
             normalized = validateHistoryConfig({
                 ...cloneConfig(this.draft),
                 exclusionPatterns,
-                dataRoot: normalizeDataRoot(this.draft.dataRoot),
+                dataRoot: normalizeHistoryDataRoot(this.draft.dataRoot, process.platform, homedir()),
             })
         } catch (error) {
-            this.validationError = error instanceof InvalidExclusionPatternError
+            this.validationError = isInvalidExclusionPatternError(error)
                 ? 'Invalid exclusion pattern.'
                 : safeValidationMessage(error)
             return
@@ -98,7 +106,7 @@ export class CommandHistorySettingsTabComponent {
             await this.config.save()
             this.draft = cloneConfig(installed)
             this.exclusionText = installed.exclusionPatterns.join('\n')
-            this.actionMessage = 'Command history settings saved.'
+            this.actionMessage = 'Command history settings saved. Restart Tabby to apply data directory changes.'
         } catch {
             this.config.store.cmdHistory = previous
             this.validationError = 'Unable to save command history settings.'
@@ -132,6 +140,10 @@ export class CommandHistorySettingsTabComponent {
                 this.actionMessage = 'Clear cancelled.'
                 return
             }
+            if (!this.isOpen(active.terminal)) {
+                this.actionMessage = 'No active terminal connection is available.'
+                return
+            }
             await this.history.clear(active.identity)
             this.actionMessage = 'Command history cleared for the focused connection.'
         } catch {
@@ -154,11 +166,8 @@ export class CommandHistorySettingsTabComponent {
 
     private resolveActiveConnection (): ActiveConnection | null {
         try {
-            let active = this.app.activeTab
-            while (active instanceof SplitTabComponent) {
-                active = active.getFocusedTab()
-            }
-            if (!(active instanceof BaseTerminalTabComponent) || !isProfileLike(active.profile)) {
+            const active = activeTerminalFrom(this.app.activeTab) ?? this.activeTerminalTracker.lastFocused
+            if (!active || !this.isOpen(active) || !isProfileLike(active.profile)) {
                 return null
             }
             return {
@@ -169,9 +178,12 @@ export class CommandHistorySettingsTabComponent {
             return null
         }
     }
-}
 
-class InvalidExclusionPatternError extends Error {}
+    private isOpen (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): boolean {
+        return this.app.tabs.some(tab => tab === terminal ||
+            (tab instanceof SplitTabComponent && tab.getAllTabs().includes(terminal)))
+    }
+}
 
 function cloneConfig (config: Readonly<CommandHistoryConfig>): CommandHistoryConfig {
     return {
@@ -186,21 +198,6 @@ function parseExclusionPatterns (text: string): string[] {
     return text.split(/\r?\n/u).map(pattern => pattern.trim()).filter(Boolean)
 }
 
-function compileExclusionPatterns (patterns: readonly string[]): void {
-    try {
-        patterns.forEach(pattern => new RegExp(pattern, 'u'))
-    } catch {
-        throw new InvalidExclusionPatternError()
-    }
-}
-
-function normalizeDataRoot (dataRoot: string | null): string | null {
-    if (typeof dataRoot !== 'string') {
-        return null
-    }
-    return dataRoot.trim() || null
-}
-
 function safeValidationMessage (error: unknown): string {
     if (!(error instanceof Error)) {
         return 'Invalid command history settings.'
@@ -211,7 +208,14 @@ function safeValidationMessage (error: unknown): string {
     if (/^(?:Weights|Command history binding|Ctrl\+C|Printable character)/u.test(error.message)) {
         return error.message
     }
+    if (error.message === 'Data directory must be an absolute path inside the user home directory') {
+        return `${error.message}.`
+    }
     return 'Invalid command history settings.'
+}
+
+function isInvalidExclusionPatternError (error: unknown): boolean {
+    return error instanceof Error && error.message === 'Invalid exclusion pattern'
 }
 
 function safeIdentityLabel (identity: ConnectionIdentity): string {
@@ -221,4 +225,12 @@ function safeIdentityLabel (identity: ConnectionIdentity): string {
 
 function isProfileLike (profile: unknown): profile is ProfileLike {
     return typeof profile === 'object' && profile !== null
+}
+
+function activeTerminalFrom (tab: unknown): BaseTerminalTabComponent<BaseTerminalProfile> | null {
+    let active = tab
+    while (active instanceof SplitTabComponent) {
+        active = active.getFocusedTab()
+    }
+    return active instanceof BaseTerminalTabComponent ? active : null
 }

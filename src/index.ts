@@ -8,13 +8,18 @@ import { SettingsTabProvider } from 'tabby-settings'
 import { CommandHistoryConfigProvider } from './config/configProvider'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from './config/historyConfig'
 import { SensitiveCommandFilter } from './history/commandPolicy'
-import { ConnectionIdentityResolver, resolveDefaultDataRoot } from './history/connectionIdentity'
+import {
+    ConnectionIdentityResolver,
+    normalizeHistoryDataRoot,
+    resolveDefaultDataRoot,
+} from './history/connectionIdentity'
 import { HistoryMatcher } from './history/historyMatcher'
 import { HistoryService } from './history/historyService'
 import { JsonlHistoryRepository } from './history/jsonlHistoryRepository'
-import { CommandHistoryTerminalDecorator } from './terminal/commandHistoryDecorator'
 import { CommandHistorySettingsTabComponent } from './settings/settingsTab.component'
 import { CommandHistorySettingsTabProvider } from './settings/settingsTabProvider'
+import { ActiveTerminalTracker } from './terminal/activeTerminalTracker'
+import { CommandHistoryTerminalDecorator } from './terminal/commandHistoryDecorator'
 
 @NgModule({
     imports: [CommonModule, FormsModule],
@@ -23,16 +28,27 @@ import { CommandHistorySettingsTabProvider } from './settings/settingsTabProvide
         { provide: ConfigProvider, useClass: CommandHistoryConfigProvider, multi: true },
         { provide: SettingsTabProvider, useClass: CommandHistorySettingsTabProvider, multi: true },
         ConnectionIdentityResolver,
+        ActiveTerminalTracker,
         HistoryMatcher,
         {
             provide: JsonlHistoryRepository,
             useFactory: (config: ConfigService, log: LogService) => {
                 const logger = log.create('cmd-history-storage')
-                const root = config.store?.cmdHistory?.dataRoot ?? resolveDefaultDataRoot(
+                const defaultRoot = resolveDefaultDataRoot(
                     process.platform,
                     process.env,
                     homedir(),
                 )
+                let root = defaultRoot
+                try {
+                    root = normalizeHistoryDataRoot(
+                        config.store?.cmdHistory?.dataRoot,
+                        process.platform,
+                        homedir(),
+                    ) ?? defaultRoot
+                } catch {
+                    logger.warn('cmd-history data directory is invalid; using the default directory')
+                }
                 return new JsonlHistoryRepository(root, { warn: message => logger.warn(message) })
             },
             deps: [ConfigService, LogService],
@@ -60,8 +76,9 @@ import { CommandHistorySettingsTabProvider } from './settings/settingsTabProvide
                 log: LogService,
                 history: HistoryService,
                 identityResolver: ConnectionIdentityResolver,
-            ) => new CommandHistoryTerminalDecorator(config, log, history, identityResolver),
-            deps: [ConfigService, LogService, HistoryService, ConnectionIdentityResolver],
+                activeTerminalTracker: ActiveTerminalTracker,
+            ) => new CommandHistoryTerminalDecorator(config, log, history, identityResolver, activeTerminalTracker),
+            deps: [ConfigService, LogService, HistoryService, ConnectionIdentityResolver, ActiveTerminalTracker],
             multi: true,
         },
     ],

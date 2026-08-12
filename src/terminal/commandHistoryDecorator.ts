@@ -7,6 +7,7 @@ import {
     CommandHistoryController,
     CommandHistoryControllerDependencies,
 } from './commandHistoryController'
+import { ActiveTerminalTracker } from './activeTerminalTracker'
 
 export type CommandHistoryControllerFactory = (
     terminal: BaseTerminalTabComponent<BaseTerminalProfile>,
@@ -21,6 +22,7 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
         logService: LogService,
         history: HistoryService,
         identityResolver: ConnectionIdentityResolver,
+        private readonly activeTerminalTracker: ActiveTerminalTracker,
         private readonly createController: CommandHistoryControllerFactory = (
             terminal,
             dependencies,
@@ -43,12 +45,14 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
             return
         }
         super.attach(terminal)
+        this.activeTerminalTracker.track(terminal)
         let controller: CommandHistoryController | undefined
         try {
             controller = this.createController(terminal, this.dependencies)
             this.controllers.set(terminal, controller)
             controller.attach()
         } catch {
+            this.activeTerminalTracker.untrack(terminal)
             this.controllers.delete(terminal)
             controller?.destroy()
             try {
@@ -60,6 +64,7 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
     }
 
     override detach (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): void {
+        this.activeTerminalTracker.untrack(terminal)
         const controller = this.controllers.get(terminal)
         if (controller) {
             this.controllers.delete(terminal)

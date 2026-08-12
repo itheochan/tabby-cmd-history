@@ -2,6 +2,7 @@
 import { Subject } from 'rxjs'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from '../../src/config/historyConfig'
 import { CommandHistoryTerminalDecorator } from '../../src/terminal/commandHistoryDecorator'
+import { ActiveTerminalTracker } from '../../src/terminal/activeTerminalTracker'
 import { SessionMiddleware, SessionMiddlewareStack } from 'tabby-terminal'
 
 function createTerminal () {
@@ -31,6 +32,8 @@ function createTerminal () {
         element: { nativeElement: host },
         sessionChanged$: new Subject<unknown>(),
         frontendReady$: new Subject<void>(),
+        focused$: new Subject<void>(),
+        destroyed$: new Subject<void>(),
         get resize$ () {
             if (!this.frontend) {
                 throw new Error('Frontend not ready')
@@ -49,6 +52,7 @@ function createTerminal () {
 function createDecorator () {
     const destroyed: object[] = []
     const history = { query: jest.fn(async () => []), record: jest.fn(async () => undefined) }
+    const tracker = new ActiveTerminalTracker()
     const decorator = new CommandHistoryTerminalDecorator(
         {
             store: { cmdHistory: {
@@ -62,6 +66,7 @@ function createDecorator () {
         { create: () => ({ warn: jest.fn() }) } as any,
         history as any,
         { resolve: () => ({ key: 'b'.repeat(64), persistent: true, label: 'Saved' }) } as any,
+        tracker,
         (terminal: any, dependencies: any) => {
             const controller = new (jest.requireActual('../../src/terminal/commandHistoryController').CommandHistoryController)(terminal, dependencies)
             const originalDestroy = controller.destroy.bind(controller)
@@ -72,7 +77,7 @@ function createDecorator () {
             return controller
         },
     )
-    return { decorator, destroyed, history }
+    return { decorator, destroyed, history, tracker }
 }
 
 test('double attach creates one controller, middleware, and overlay', () => {
@@ -92,6 +97,7 @@ test('passes the terminal lifetime token to identity resolution', () => {
         { create: () => ({ warn: jest.fn() }) } as any,
         { query: jest.fn(), record: jest.fn() } as any,
         resolver as any,
+        new ActiveTerminalTracker(),
     )
 
     decorator.attach(terminal as any)
@@ -108,6 +114,22 @@ test('detach is idempotent and destroys controller before calling the base lifec
     expect(destroyed).toEqual([terminal])
     expect(terminal.session.middleware.entries).toHaveLength(1)
     expect(terminal.element.nativeElement.querySelector('.cmd-history-overlay')).toBeNull()
+})
+
+test('tracking multiple terminals does not clear another terminal on detach', () => {
+    const first = createTerminal()
+    const second = createTerminal()
+    const { decorator, tracker } = createDecorator()
+    decorator.attach(first as any)
+    decorator.attach(second as any)
+    first.focused$.next()
+    second.focused$.next()
+
+    decorator.detach(first as any)
+    expect(tracker.lastFocused).toBe(second)
+
+    decorator.detach(second as any)
+    expect(tracker.lastFocused).toBeNull()
 })
 
 test('attaches when session and frontend arrive after decorator attachment', () => {
@@ -133,6 +155,7 @@ test('controller construction failure leaves the terminal undecorated', () => {
         { create: () => ({ warn: jest.fn() }) } as any,
         { query: jest.fn(), record: jest.fn() } as any,
         { resolve: jest.fn() } as any,
+        new ActiveTerminalTracker(),
         () => { throw new Error('controller unavailable') },
     )
     expect(() => decorator.attach(terminal as any)).not.toThrow()

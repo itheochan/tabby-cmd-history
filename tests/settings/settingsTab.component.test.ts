@@ -13,6 +13,9 @@ jest.mock('@angular/core', () => ({
 
 import { CommonModule } from '@angular/common'
 import { FormsModule } from '@angular/forms'
+import { homedir } from 'node:os'
+import { resolve } from 'node:path'
+import { Subject } from 'rxjs'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from '../../src/config/historyConfig'
 import { ConnectionIdentityResolver } from '../../src/history/connectionIdentity'
 import { CommandHistorySettingsTabComponent } from '../../src/settings/settingsTab.component'
@@ -21,6 +24,9 @@ import CommandHistoryModule from '../../src/index'
 import { SplitTabComponent } from 'tabby-core'
 import { SettingsTabProvider } from 'tabby-settings'
 import { BaseTerminalTabComponent } from 'tabby-terminal'
+import { JsonlHistoryRepository } from '../../src/history/jsonlHistoryRepository'
+import { resolveDefaultDataRoot } from '../../src/history/connectionIdentity'
+import { ActiveTerminalTracker } from '../../src/terminal/activeTerminalTracker'
 
 function cloneDefaults () {
     return {
@@ -40,12 +46,16 @@ function terminal (profile: Record<string, unknown> = {
     const tab = Object.create(BaseTerminalTabComponent.prototype) as BaseTerminalTabComponent<any>
     tab.profile = profile
     tab.title = 'PowerShell'
+    ;(tab as any).focused$ = new Subject<void>()
+    ;(tab as any).destroyed$ = new Subject<void>()
+    tab.hasFocus = false
     return tab
 }
 
 function split (focused: BaseTerminalTabComponent<any>): SplitTabComponent {
     const tab = Object.create(SplitTabComponent.prototype) as SplitTabComponent
     tab.getFocusedTab = () => focused
+    tab.getAllTabs = () => [focused]
     return tab
 }
 
@@ -53,26 +63,34 @@ function createSettingsFixture (options: {
     activeTab?: unknown
     confirm?: boolean
     resolver?: ConnectionIdentityResolver
+    tracker?: ActiveTerminalTracker
+    tabs?: unknown[]
 } = {}) {
     const initial = cloneDefaults()
     const config = {
         store: { cmdHistory: initial },
         save: jest.fn(async () => undefined),
     }
-    const app = { activeTab: options.activeTab === undefined ? terminal() : options.activeTab }
+    const activeTab = options.activeTab === undefined ? terminal() : options.activeTab
+    const app = {
+        activeTab,
+        tabs: options.tabs ?? (activeTab ? [activeTab] : []),
+    }
     const platform = {
         showMessageBox: jest.fn(async () => ({ response: options.confirm === false ? 0 : 1 })),
     }
     const history = { clear: jest.fn(async () => undefined) }
     const resolver = options.resolver ?? new ConnectionIdentityResolver()
+    const tracker = options.tracker ?? new ActiveTerminalTracker()
     const component = new CommandHistorySettingsTabComponent(
         config as any,
         app as any,
         platform as any,
         resolver,
         history as any,
+        tracker,
     )
-    return { app, component, config, history, initial, platform, resolver }
+    return { app, component, config, history, initial, platform, resolver, tracker }
 }
 
 describe('CommandHistorySettingsTabComponent', () => {
@@ -120,6 +138,16 @@ describe('CommandHistorySettingsTabComponent', () => {
         expect(fixture.config.save).not.toHaveBeenCalled()
     })
 
+    test('saves a Unicode property exclusion accepted by the runtime filter', async () => {
+        const fixture = createSettingsFixture()
+        fixture.component.exclusionText = '^\\p{L}+$'
+
+        await fixture.component.save()
+
+        expect(fixture.config.store.cmdHistory.exclusionPatterns).toEqual(['^\\p{L}+$'])
+        expect(fixture.config.save).toHaveBeenCalledTimes(1)
+    })
+
     test.each([
         ['range', (draft: any) => { draft.capacity = 0 }],
         ['weight', (draft: any) => { draft.weights.recency = -1 }],
@@ -148,6 +176,28 @@ describe('CommandHistorySettingsTabComponent', () => {
 
         expect(fixture.config.store.cmdHistory).toBe(fixture.initial)
         expect(fixture.component.validationError).toBe('Unable to save command history settings.')
+    })
+
+    test('normalizes an in-home data root and explains restart', async () => {
+        const fixture = createSettingsFixture()
+        fixture.component.draft.dataRoot = `  ${resolve(homedir(), 'cmd-history', '..', 'cmd-history-data')}  `
+
+        await fixture.component.save()
+
+        expect(fixture.config.store.cmdHistory.dataRoot).toBe(resolve(homedir(), 'cmd-history-data'))
+        expect(fixture.component.actionMessage).toContain('Restart Tabby')
+    })
+
+    test('rejects a relative data root without leaking it or changing config', async () => {
+        const fixture = createSettingsFixture()
+        fixture.component.draft.dataRoot = 'relative/secret-token'
+
+        await fixture.component.save()
+
+        expect(fixture.component.validationError).toBe('Data directory must be an absolute path inside the user home directory.')
+        expect(fixture.component.validationError).not.toContain('secret-token')
+        expect(fixture.config.store.cmdHistory).toBe(fixture.initial)
+        expect(fixture.config.save).not.toHaveBeenCalled()
     })
 
     test('clears only the active connection after exact confirmation', async () => {
@@ -179,6 +229,63 @@ describe('CommandHistorySettingsTabComponent', () => {
         expect(fixture.history.clear).not.toHaveBeenCalledWith(
             fixture.resolver.resolve(unfocused.profile, unfocused),
         )
+    })
+
+    test('clears the last focused open terminal after entering Settings', async () => {
+        const tracked = terminal({ id: 'tracked', type: 'local', name: 'Tracked', options: {} })
+        const tracker = new ActiveTerminalTracker()
+        tracker.track(tracked)
+        ;(tracked.focused$ as Subject<void>).next()
+        const fixture = createSettingsFixture({ activeTab: {}, tabs: [tracked], tracker })
+
+        await fixture.component.clearActiveConnection()
+
+        expect(fixture.history.clear).toHaveBeenCalledWith(fixture.resolver.resolve(tracked.profile, tracked))
+    })
+
+    test('uses the most recently focused pane from an open split', async () => {
+        const first = terminal({ id: 'first', type: 'local', name: 'First', options: {} })
+        const second = terminal({ id: 'second', type: 'local', name: 'Second', options: {} })
+        const tracker = new ActiveTerminalTracker()
+        tracker.track(first)
+        tracker.track(second)
+        ;(first.focused$ as Subject<void>).next()
+        ;(second.focused$ as Subject<void>).next()
+        const openSplit = split(second)
+        openSplit.getAllTabs = () => [first, second]
+        const fixture = createSettingsFixture({ activeTab: {}, tabs: [openSplit], tracker })
+
+        await fixture.component.clearActiveConnection()
+
+        expect(fixture.history.clear).toHaveBeenCalledWith(fixture.resolver.resolve(second.profile, second))
+    })
+
+    test('disables clear when the tracked terminal is no longer in the open tab tree', async () => {
+        const tracked = terminal()
+        const tracker = new ActiveTerminalTracker()
+        tracker.track(tracked)
+        ;(tracked.focused$ as Subject<void>).next()
+        const fixture = createSettingsFixture({ activeTab: {}, tabs: [], tracker })
+
+        expect(fixture.component.canClearCurrentConnection).toBe(false)
+        await fixture.component.clearActiveConnection()
+
+        expect(fixture.history.clear).not.toHaveBeenCalled()
+    })
+
+    test('does not clear when the terminal closes during confirmation', async () => {
+        const active = terminal()
+        const fixture = createSettingsFixture({ activeTab: active, tabs: [active] })
+        let confirm!: (result: { response: number }) => void
+        fixture.platform.showMessageBox.mockReturnValueOnce(new Promise(resolve => { confirm = resolve }))
+
+        const clearing = fixture.component.clearActiveConnection()
+        fixture.app.tabs = []
+        confirm({ response: 1 })
+        await clearing
+
+        expect(fixture.history.clear).not.toHaveBeenCalled()
+        expect(fixture.component.actionMessage).toBe('No active terminal connection is available.')
     })
 
     test('does not clear after cancellation', async () => {
@@ -234,5 +341,19 @@ describe('CommandHistorySettingsTabProvider', () => {
             useClass: CommandHistorySettingsTabProvider,
             multi: true,
         })
+    })
+
+    test('module falls back to the default root for unsafe legacy config without leaking it', () => {
+        const injectorDef = (CommandHistoryModule as any).ɵinj
+        const repositoryProvider = injectorDef.providers.find((provider: any) => provider.provide === JsonlHistoryRepository)
+        const warn = jest.fn()
+        const repository = repositoryProvider.useFactory(
+            { store: { cmdHistory: { dataRoot: '../../secret-token' } } },
+            { create: () => ({ warn }) },
+        )
+
+        expect((repository as any).root).toBe(resolveDefaultDataRoot(process.platform, process.env, homedir()))
+        expect(warn).toHaveBeenCalledTimes(1)
+        expect(warn.mock.calls.flat().join(' ')).not.toContain('secret-token')
     })
 })

@@ -309,3 +309,55 @@ test('clears only the requested persistent or memory identity', async () => {
     expect(repository.clear).toHaveBeenCalledTimes(1)
     expect(repository.clear).toHaveBeenCalledWith('a')
 })
+
+test('publishes successful same-key mutations and refreshes but not an initial load', async () => {
+    const repository = fakeRepository({ a: [entry('git before')] })
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    const changes: string[] = []
+    service.changes$.subscribe(key => changes.push(key))
+
+    await service.query(identity('a'), 'git', defaults)
+    await service.record(identity('a'), 'git record', { trustworthy: true, visibleEcho: true }, defaults, new Date())
+    await service.record(identity('memory:a', false), 'pwd', { trustworthy: true, visibleEcho: true }, defaults, new Date())
+    await service.clear(identity('memory:a', false))
+    repository.replace('a', [entry('git external')])
+    repository.publish('a')
+    await Promise.resolve()
+    await Promise.resolve()
+
+    expect(changes).toEqual(['a', 'memory:a', 'memory:a', 'a'])
+})
+
+test('does not publish a stale or failed persistent installation', async () => {
+    const repository = fakeRepository()
+    const stale = deferred<HistoryEntry[]>()
+    const newest = deferred<HistoryEntry[]>()
+    repository.record.mockReturnValueOnce(stale.promise).mockReturnValueOnce(newest.promise)
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    const changes: string[] = []
+    service.changes$.subscribe(key => changes.push(key))
+    const capture = { trustworthy: true, visibleEcho: true }
+
+    const first = service.record(identity('a'), 'first', capture, defaults, new Date())
+    const second = service.record(identity('a'), 'second', capture, defaults, new Date())
+    stale.resolve([entry('first')])
+    await first
+    newest.reject(new Error('write failed'))
+    await expect(second).rejects.toThrow('write failed')
+
+    expect(changes).toEqual([])
+})
+
+test('failed persistent clear preserves the installed cache and publishes no change', async () => {
+    const repository = fakeRepository({ a: [entry('git status')] })
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    await service.query(identity('a'), 'git', defaults)
+    const changes: string[] = []
+    service.changes$.subscribe(key => changes.push(key))
+    repository.clear.mockRejectedValueOnce(new Error('Unable to clear command history'))
+
+    await expect(service.clear(identity('a'))).rejects.toThrow('Unable to clear command history')
+
+    expect((await service.query(identity('a'), 'git', defaults)).map(item => item.command)).toEqual(['git status'])
+    expect(changes).toEqual([])
+})

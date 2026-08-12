@@ -18,6 +18,7 @@ import { TerminalGeometryAdapter } from './terminalGeometryAdapter'
 import { VisibleEchoVerifier } from './visibleEchoVerifier'
 
 export interface ControllerHistoryService {
+    changes$?: Observable<string>
     query: (
         identity: ConnectionIdentity,
         query: string,
@@ -219,6 +220,9 @@ export class CommandHistoryController {
         if (this.dependencies.configChanged$) {
             this.subscribe(this.dependencies.configChanged$, () => this.handleConfigChanged())
         }
+        if (this.dependencies.history.changes$) {
+            this.subscribe(this.dependencies.history.changes$, key => this.handleHistoryChanged(key))
+        }
     }
 
     private subscribe<T> (observable: Observable<T>, handler: (value: T) => void): void {
@@ -360,6 +364,14 @@ export class CommandHistoryController {
             this.buffer.reset()
             return
         }
+        this.queryFromBuffer()
+    }
+
+    private handleHistoryChanged (key: string): void {
+        if (key !== this.identity.key) {
+            return
+        }
+        this.invalidatePredictions()
         this.queryFromBuffer()
     }
 

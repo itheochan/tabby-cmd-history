@@ -21,6 +21,12 @@ const prediction = (command: string): Prediction => ({
     matchIndex: 0,
 })
 
+function deferred<T> (): { promise: Promise<T>; resolve: (value: T) => void } {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>(resolvePromise => { resolve = resolvePromise })
+    return { promise, resolve }
+}
+
 class FakeSession {
     readonly middleware = new SessionMiddlewareStack() as SessionMiddlewareStack & { entries: unknown[] }
     readonly bytes: Buffer[] = []
@@ -172,6 +178,89 @@ async function settle (): Promise<void> {
 
 describe('CommandHistoryController', () => {
     afterEach(() => jest.useRealTimers())
+
+    test('invalidates and requeries trusted input after a same-key history change', async () => {
+        const changes$ = new Subject<string>()
+        const history = {
+            changes$,
+            query: jest.fn()
+                .mockResolvedValueOnce([prediction('git status')])
+                .mockResolvedValueOnce([]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.terminal.send('git')
+        await settle()
+        expect(fixture.controller.state().predictions).toHaveLength(1)
+
+        changes$.next('a'.repeat(64))
+        expect(fixture.controller.state().predictions).toEqual([])
+        await settle()
+
+        expect(history.query).toHaveBeenCalledTimes(2)
+    })
+
+    test('an initial history cache load does not trigger a feedback query', async () => {
+        const repository = {
+            updates$: new Subject<string>(),
+            load: jest.fn(async () => []),
+            record: jest.fn(async () => []),
+            clear: jest.fn(async () => undefined),
+        }
+        const history = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+        const query = jest.spyOn(history, 'query')
+        const fixture = createFixture([], { history })
+
+        fixture.terminal.send('git')
+        await settle()
+
+        expect(query).toHaveBeenCalledTimes(1)
+    })
+
+    test('ignores another identity change and unsubscribes on destroy', async () => {
+        const changes$ = new Subject<string>()
+        const history = {
+            changes$,
+            query: jest.fn(async () => [prediction('git status')]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.terminal.send('git')
+        await settle()
+
+        changes$.next('b'.repeat(64))
+        expect(fixture.controller.state().predictions).toHaveLength(1)
+        expect(history.query).toHaveBeenCalledTimes(1)
+
+        fixture.controller.destroy()
+        changes$.next('a'.repeat(64))
+        await settle()
+        expect(history.query).toHaveBeenCalledTimes(1)
+    })
+
+    test('a stale same-key requery cannot restore cleared candidates', async () => {
+        const changes$ = new Subject<string>()
+        const stale = deferred<Prediction[]>()
+        const history = {
+            changes$,
+            query: jest.fn()
+                .mockResolvedValueOnce([prediction('git status')])
+                .mockReturnValueOnce(stale.promise)
+                .mockResolvedValueOnce([]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.terminal.send('git')
+        await settle()
+        changes$.next('a'.repeat(64))
+        changes$.next('a'.repeat(64))
+        await settle()
+        stale.resolve([prediction('stale command')])
+        await settle()
+
+        expect(fixture.controller.state().predictions).toEqual([])
+        expect(history.query).toHaveBeenCalledTimes(3)
+    })
 
     test('intercepts candidate keys only while predictions are active and accepts without Enter', async () => {
         const fixture = createFixture(['git checkout main', 'git cherry-pick a'])

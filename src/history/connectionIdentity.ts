@@ -78,6 +78,35 @@ export function resolveDefaultDataRoot (
     return posix.join(env.XDG_DATA_HOME || posix.join(home, '.local', 'share'), 'tabby', 'cmd-history')
 }
 
+export function normalizeHistoryDataRoot (
+    value: unknown,
+    platform: NodeJS.Platform,
+    home: string,
+): string | null {
+    if (value === null || value === undefined) {
+        return null
+    }
+    if (typeof value !== 'string') {
+        throw new Error('Data directory must be an absolute path inside the user home directory')
+    }
+    const input = value.trim()
+    if (!input) {
+        return null
+    }
+    const path = platform === 'win32' ? win32 : posix
+    if (!path.isAbsolute(input)) {
+        throw new Error('Data directory must be an absolute path inside the user home directory')
+    }
+    const normalizedHome = path.resolve(home)
+    const normalized = path.resolve(input)
+    const relative = path.relative(normalizedHome, normalized)
+    const outsideHome = relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+    if (outsideHome) {
+        throw new Error('Data directory must be an absolute path inside the user home directory')
+    }
+    return normalized
+}
+
 function resolveSshCanonical (options: Record<string, unknown>): string | undefined {
     const host = normalizeText(options.host).toLowerCase()
     const user = normalizeText(options.user)

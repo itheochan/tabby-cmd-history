@@ -25,6 +25,12 @@ test('custom rules block commands without built-in sensitive terms', () => {
     expect(filter.allows('ssh private-host', false)).toBe(true)
 })
 
+test('custom rules use Unicode-aware case-insensitive flags', () => {
+    const filter = new SensitiveCommandFilter(['^\\p{L}+$'])
+    expect(filter.allows('中文', true)).toBe(false)
+    expect(filter.allows('123', true)).toBe(true)
+})
+
 test('invalid replacement preserves prior rules', () => {
     const filter = new SensitiveCommandFilter(['private-host'])
     expect(() => filter.replacePatterns(['['])).toThrow('Invalid exclusion pattern')

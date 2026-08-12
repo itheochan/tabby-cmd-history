@@ -249,14 +249,82 @@ test('warns once per key and failure stage without leaking command text', async 
     await repo.record(key, 'first secret command', new Date('2026-08-12T10:00:00Z'), 10)
     await repo.record(key, 'second secret command', new Date('2026-08-12T11:00:00Z'), 10)
     await sameKeyAtAnotherRoot.record(key, 'third secret command', new Date('2026-08-12T12:00:00Z'), 10)
-    await repo.clear(key)
-    await repo.clear(key)
+    await expect(repo.clear(key)).rejects.toThrow('Unable to clear command history')
+    await expect(repo.clear(key)).rejects.toThrow('Unable to clear command history')
 
     expect(warn.mock.calls.map(call => call[0])).toEqual([
         expect.stringContaining('stage append'),
         expect.stringContaining('stage clear'),
     ])
     expect(warn.mock.calls.flat().join(' ')).not.toMatch(/first|second|secret|command/u)
+})
+
+test('failed clear preserves disk bytes and state, emits no update, and can be retried', async () => {
+    const root = await makeRoot()
+    const key = '9'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    const warn = jest.fn()
+    let failDelete = true
+    const repo = new JsonlHistoryRepository(root, {
+        warn,
+        fileOperations: {
+            rm: async (path, options) => {
+                if (path === file && failDelete) {
+                    throw new Error(`private delete failure ${path}`)
+                }
+                await rm(path, options)
+            },
+        },
+    })
+    await repo.record(key, 'existing command', new Date('2026-08-12T10:00:00Z'), 10)
+    const before = await readFile(file, 'utf8')
+    const updates: string[] = []
+    const subscription = repo.updates$.subscribe(update => updates.push(update))
+
+    let failure: unknown
+    try {
+        await repo.clear(key)
+    } catch (error) {
+        failure = error
+    }
+    expect(failure).toEqual(new Error('Unable to clear command history'))
+    expect(String(failure)).not.toMatch(new RegExp(`${key}|existing|${root.replace(/\\/gu, '\\\\')}`, 'u'))
+    expect(await readFile(file, 'utf8')).toBe(before)
+    expect((await repo.load(key, 10)).map(item => item.command)).toEqual(['existing command'])
+    expect(updates).toEqual([])
+
+    failDelete = false
+    await expect(repo.clear(key)).resolves.toBeUndefined()
+    expect(updates).toEqual([key])
+    await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    subscription.unsubscribe()
+})
+
+test('temporary-file delete failure leaves the main history bytes untouched', async () => {
+    const root = await makeRoot()
+    const key = 'a'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    const temporary = `${file}.compact.tmp`
+    const repo = new JsonlHistoryRepository(root, {
+        fileOperations: {
+            rm: async (path, options) => {
+                if (path === temporary) {
+                    throw new Error('temporary delete unavailable')
+                }
+                await rm(path, options)
+            },
+        },
+    })
+    await repo.record(key, 'must remain', new Date('2026-08-12T10:00:00Z'), 10)
+    const before = await readFile(file, 'utf8')
+    const updates: string[] = []
+    repo.updates$.subscribe(update => updates.push(update))
+
+    await expect(repo.clear(key)).rejects.toThrow('Unable to clear command history')
+
+    expect(await readFile(file, 'utf8')).toBe(before)
+    expect((await repo.load(key, 10)).map(item => item.command)).toEqual(['must remain'])
+    expect(updates).toEqual([])
 })
 
 test('preserves source bytes and unrelated temp files when rename fails after compaction sync', async () => {

@@ -68,7 +68,7 @@
     .form-group
         label(for='cmd-history-data-root') Custom data directory (optional)
         input#cmd-history-data-root.form-control(type='text' '[(ngModel)]'='draft.dataRoot' aria-describedby='cmd-history-data-root-help')
-        small#cmd-history-data-root-help.form-text.text-muted Leave blank to use Tabby’s default application data directory.
+        small#cmd-history-data-root-help.form-text.text-muted Use an absolute path inside your user home directory, or leave blank for the default. Restart Tabby after changing it.
 
     .alert.alert-danger('*ngIf'='validationError' role='alert') {{ validationError }}
     .alert.alert-info('*ngIf'='actionMessage' role='status' aria-live='polite') {{ actionMessage }}

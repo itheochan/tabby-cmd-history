@@ -143,18 +143,14 @@ export class JsonlHistoryRepository {
     async clear (key: string): Promise<void> {
         const file = this.fileFor(key)
         await runSerial(file, async () => {
-            let failed = false
-            for (const target of [file, temporaryFileFor(file)]) {
-                try {
-                    await this.fileOperations.rm(target, { force: true })
-                } catch {
-                    failed = true
-                }
-            }
-            if (failed) {
+            try {
+                await this.fileOperations.rm(temporaryFileFor(file), { force: true })
+                await this.fileOperations.rm(file, { force: true })
+            } catch {
                 this.warnStorageFailure(key, 'clear')
+                throw new Error('Unable to clear command history')
             }
-            states.set(file, emptyState(!failed))
+            states.set(file, emptyState(true))
             this.updatesSubject.next(key)
         })
     }

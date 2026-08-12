@@ -1,4 +1,8 @@
-import { ConnectionIdentityResolver, resolveDefaultDataRoot } from '../../src/history/connectionIdentity'
+import {
+    ConnectionIdentityResolver,
+    normalizeHistoryDataRoot,
+    resolveDefaultDataRoot,
+} from '../../src/history/connectionIdentity'
 
 const resolver = new ConnectionIdentityResolver()
 
@@ -9,6 +13,40 @@ test('uses a stable distinct memory key for each terminal lifetime object', () =
 
     expect(resolver.resolve(profile, firstTerminal)).toEqual(resolver.resolve(profile, firstTerminal))
     expect(resolver.resolve(profile, firstTerminal).key).not.toBe(resolver.resolve(profile, secondTerminal).key)
+})
+
+describe('custom history data root', () => {
+    test.each([
+        ['win32', '  ', 'C:\\Users\\Theo', null],
+        ['win32', 'c:/users/theo/history/../cmd-history', 'C:\\Users\\Theo', 'c:\\users\\theo\\cmd-history'],
+        ['win32', 'C:\\Users\\Theo', 'C:\\Users\\Theo', 'C:\\Users\\Theo'],
+        ['linux', '  ', '/home/theo', null],
+        ['linux', '/home/theo/history/../cmd-history', '/home/theo', '/home/theo/cmd-history'],
+        ['linux', '/home/theo', '/home/theo', '/home/theo'],
+    ] as const)('normalizes an in-home %s path', (platform, input, home, expected) => {
+        expect(normalizeHistoryDataRoot(input, platform, home)).toBe(expected)
+    })
+
+    test.each([
+        ['win32', 'relative\\history', 'C:\\Users\\Theo'],
+        ['win32', 'C:\\Users\\Theo\\..\\Other', 'C:\\Users\\Theo'],
+        ['win32', 'D:\\history', 'C:\\Users\\Theo'],
+        ['linux', 'relative/history', '/home/theo'],
+        ['linux', '/home/theo/../other', '/home/theo'],
+        ['linux', '/var/history', '/home/theo'],
+    ] as const)('rejects an unsafe %s path without echoing it', (platform, input, home) => {
+        expect(() => normalizeHistoryDataRoot(input, platform, home)).toThrow('Data directory must be an absolute path inside the user home directory')
+        try {
+            normalizeHistoryDataRoot(input, platform, home)
+        } catch (error) {
+            expect(String(error)).not.toContain(input)
+        }
+    })
+
+    test('rejects a non-string legacy value', () => {
+        expect(() => normalizeHistoryDataRoot({ secret: 'value' } as never, 'linux', '/home/theo'))
+            .toThrow('Data directory must be an absolute path inside the user home directory')
+    })
 })
 
 test('saved profiles use type and stable id, not display name', () => {

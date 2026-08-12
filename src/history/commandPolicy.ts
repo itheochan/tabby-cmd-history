@@ -1,4 +1,13 @@
 const BUILT_IN = /password|asplaintext|token|apikey|secret/i
+export const EXCLUSION_PATTERN_FLAGS = 'iu'
+
+export function compileExclusionPatterns (patterns: readonly string[]): RegExp[] {
+    try {
+        return patterns.map(source => new RegExp(source, EXCLUSION_PATTERN_FLAGS))
+    } catch {
+        throw new Error('Invalid exclusion pattern')
+    }
+}
 
 export function normalizeCommand (command: string): string {
     return command.replace(/\r\n?/g, '\n').trim()
@@ -17,13 +26,7 @@ export class SensitiveCommandFilter {
             patterns.every((pattern, index) => pattern === this.patternSources[index])) {
             return
         }
-        const next = patterns.map(source => {
-            try {
-                return new RegExp(source, 'i')
-            } catch {
-                throw new Error(`Invalid exclusion pattern: ${source}`)
-            }
-        })
+        const next = compileExclusionPatterns(patterns)
         this.patterns = next
         this.patternSources = [...patterns]
     }
