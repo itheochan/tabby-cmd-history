@@ -45,14 +45,19 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
             return
         }
         super.attach(terminal)
-        this.activeTerminalTracker.track(terminal)
+        try {
+            if (!this.activeTerminalTracker.track(terminal)) {
+                this.warnTracker('attach')
+            }
+        } catch {
+            this.warnTracker('attach')
+        }
         let controller: CommandHistoryController | undefined
         try {
             controller = this.createController(terminal, this.dependencies)
             this.controllers.set(terminal, controller)
             controller.attach()
         } catch {
-            this.activeTerminalTracker.untrack(terminal)
             this.controllers.delete(terminal)
             controller?.destroy()
             try {
@@ -64,13 +69,25 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
     }
 
     override detach (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): void {
-        this.activeTerminalTracker.untrack(terminal)
+        try {
+            this.activeTerminalTracker.untrack(terminal)
+        } catch {
+            this.warnTracker('detach')
+        }
         const controller = this.controllers.get(terminal)
         if (controller) {
             this.controllers.delete(terminal)
             controller.destroy()
         }
         super.detach(terminal)
+    }
+
+    private warnTracker (stage: 'attach' | 'detach'): void {
+        try {
+            this.dependencies.logger.warn(`cmd-history stage=tracker-${stage} key=unresolved`)
+        } catch {
+            // Diagnostics must never interrupt terminal lifecycle.
+        }
     }
 
     private currentConfig (): CommandHistoryConfig {

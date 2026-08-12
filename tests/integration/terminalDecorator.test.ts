@@ -3,7 +3,7 @@ import { Subject } from 'rxjs'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from '../../src/config/historyConfig'
 import { CommandHistoryTerminalDecorator } from '../../src/terminal/commandHistoryDecorator'
 import { ActiveTerminalTracker } from '../../src/terminal/activeTerminalTracker'
-import { SessionMiddleware, SessionMiddlewareStack } from 'tabby-terminal'
+import { SessionMiddleware, SessionMiddlewareStack, TerminalDecorator } from 'tabby-terminal'
 
 function createTerminal () {
     const host = document.createElement('div')
@@ -160,6 +160,88 @@ test('controller construction failure leaves the terminal undecorated', () => {
     )
     expect(() => decorator.attach(terminal as any)).not.toThrow()
     expect(terminal.session.middleware.entries).toHaveLength(1)
+})
+
+test('tracker registration failure does not block controller or base attach lifecycle', () => {
+    const terminal = createTerminal()
+    const tracker = {
+        track: jest.fn(() => { throw new Error('private profile and command') }),
+        untrack: jest.fn(),
+    }
+    const controller = { attach: jest.fn(), destroy: jest.fn() }
+    const createController = jest.fn(() => controller)
+    const warn = jest.fn()
+    const baseAttach = jest.spyOn(TerminalDecorator.prototype, 'attach')
+    const decorator = new CommandHistoryTerminalDecorator(
+        { store: { cmdHistory: DEFAULT_COMMAND_HISTORY_CONFIG }, changed$: new Subject<void>() } as any,
+        { create: () => ({ warn }) } as any,
+        { query: jest.fn(), record: jest.fn() } as any,
+        { resolve: jest.fn() } as any,
+        tracker as any,
+        createController as any,
+    )
+
+    expect(() => decorator.attach(terminal as any)).not.toThrow()
+
+    expect(baseAttach).toHaveBeenCalledWith(terminal)
+    expect(createController).toHaveBeenCalledTimes(1)
+    expect(controller.attach).toHaveBeenCalledTimes(1)
+    expect(warn).toHaveBeenCalledWith('cmd-history stage=tracker-attach key=unresolved')
+    expect(warn.mock.calls.flat().join(' ')).not.toMatch(/private|profile|command/u)
+    baseAttach.mockRestore()
+})
+
+test('tracker detach failure does not block controller destruction or base detach', () => {
+    const terminal = createTerminal()
+    const tracker = {
+        track: jest.fn(() => true),
+        untrack: jest.fn(() => { throw new Error('private terminal') }),
+    }
+    const controller = { attach: jest.fn(), destroy: jest.fn() }
+    const warn = jest.fn()
+    const baseDetach = jest.spyOn(TerminalDecorator.prototype, 'detach')
+    const decorator = new CommandHistoryTerminalDecorator(
+        { store: { cmdHistory: DEFAULT_COMMAND_HISTORY_CONFIG }, changed$: new Subject<void>() } as any,
+        { create: () => ({ warn }) } as any,
+        { query: jest.fn(), record: jest.fn() } as any,
+        { resolve: jest.fn() } as any,
+        tracker as any,
+        () => controller as any,
+    )
+    decorator.attach(terminal as any)
+
+    expect(() => decorator.detach(terminal as any)).not.toThrow()
+
+    expect(controller.destroy).toHaveBeenCalledTimes(1)
+    expect(baseDetach).toHaveBeenCalledWith(terminal)
+    expect(warn).toHaveBeenCalledWith('cmd-history stage=tracker-detach key=unresolved')
+    expect(warn.mock.calls.flat().join(' ')).not.toContain('private terminal')
+    baseDetach.mockRestore()
+})
+
+test('successful tracking survives controller attach failure until detach', () => {
+    const terminal = createTerminal()
+    const tracker = new ActiveTerminalTracker()
+    ;(terminal as any).hasFocus = true
+    const controller = {
+        attach: jest.fn(() => { throw new Error('controller attach failed') }),
+        destroy: jest.fn(),
+    }
+    const decorator = new CommandHistoryTerminalDecorator(
+        { store: { cmdHistory: DEFAULT_COMMAND_HISTORY_CONFIG }, changed$: new Subject<void>() } as any,
+        { create: () => ({ warn: jest.fn() }) } as any,
+        { query: jest.fn(), record: jest.fn() } as any,
+        { resolve: jest.fn() } as any,
+        tracker,
+        () => controller as any,
+    )
+
+    expect(() => decorator.attach(terminal as any)).not.toThrow()
+    expect(tracker.lastFocused).toBe(terminal)
+    expect(controller.destroy).toHaveBeenCalledTimes(1)
+
+    decorator.detach(terminal as any)
+    expect(tracker.lastFocused).toBeNull()
 })
 
 test('unshifted plugin participates in real terminal-input direction beside middleware', async () => {

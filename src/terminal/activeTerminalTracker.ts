@@ -9,16 +9,47 @@ export class ActiveTerminalTracker {
         return this.current
     }
 
-    track (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): void {
+    track (terminal: BaseTerminalTabComponent<BaseTerminalProfile>): boolean {
         if (this.subscriptions.has(terminal)) {
-            return
+            return true
         }
         const subscription = new Subscription()
-        subscription.add(terminal.focused$.subscribe(() => { this.current = terminal }))
-        subscription.add(terminal.destroyed$.subscribe(() => this.untrack(terminal)))
-        this.subscriptions.set(terminal, subscription)
-        if (terminal.hasFocus) {
-            this.current = terminal
+        let committed = false
+        let focusedBeforeCommit = false
+        let destroyedBeforeCommit = false
+        try {
+            subscription.add(terminal.focused$.subscribe(() => {
+                if (committed) {
+                    this.current = terminal
+                } else {
+                    focusedBeforeCommit = true
+                }
+            }))
+            subscription.add(terminal.destroyed$.subscribe(() => {
+                if (committed) {
+                    this.untrack(terminal)
+                } else {
+                    destroyedBeforeCommit = true
+                }
+            }))
+            const hasFocus = terminal.hasFocus
+            if (destroyedBeforeCommit) {
+                subscription.unsubscribe()
+                return false
+            }
+            this.subscriptions.set(terminal, subscription)
+            committed = true
+            if (hasFocus || focusedBeforeCommit) {
+                this.current = terminal
+            }
+            return true
+        } catch {
+            try {
+                subscription.unsubscribe()
+            } catch {
+                // Tracker cleanup must never interrupt terminal attachment.
+            }
+            return false
         }
     }
 
