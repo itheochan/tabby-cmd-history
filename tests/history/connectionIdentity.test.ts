@@ -89,6 +89,49 @@ test('serial quick connect preserves device casing for isolation', () => {
     expect(upper.key).not.toBe(lower.key)
 })
 
+test('current Tabby id-less serial profiles persist all canonical dimensions', () => {
+    const baseOptions = {
+        port: ' COM3 ',
+        baudrate: '9600',
+        databits: '8',
+        stopbits: '1',
+        parity: 'NONE',
+    }
+    const base = resolver.resolve({ type: 'serial', options: baseOptions }, 'base')
+
+    expect(base.persistent).toBe(true)
+    for (const [field, value] of [
+        ['port', 'COM4'],
+        ['baudrate', 115200],
+        ['databits', 7],
+        ['stopbits', 1.5],
+        ['parity', 'even'],
+    ] as const) {
+        const changed = resolver.resolve({ type: 'serial', options: { ...baseOptions, [field]: value } }, field)
+        expect(changed.persistent).toBe(true)
+        expect(changed.key).not.toBe(base.key)
+    }
+
+    expect(resolver.resolve({
+        type: 'serial',
+        options: { port: 'COM3', baudrate: 9600 },
+    }, 'defaults').key).toBe(base.key)
+})
+
+test.each([
+    [{ baudrate: 9600 }, 'missing-port'],
+    [{ port: 'COM3' }, 'missing-baudrate'],
+    [{ port: '', device: 'legacy', baudrate: 9600, baud: 9600 }, 'invalid-actual-port'],
+    [{ port: 'COM3', baudrate: null, baud: 9600 }, 'invalid-actual-baudrate'],
+    [{ port: 'COM3', baudrate: 9600.5 }, 'fractional-baudrate'],
+    [{ port: 'COM3', baudrate: 9600, databits: null }, 'null-databits'],
+    [{ port: 'COM3', baudrate: 9600, databits: 9 }, 'invalid-databits'],
+    [{ port: 'COM3', baudrate: 9600, stopbits: 0 }, 'invalid-stopbits'],
+    [{ port: 'COM3', baudrate: 9600, parity: 'mixed' }, 'invalid-parity'],
+] as const)('current Tabby serial profile %s safely falls back to memory', (options, lifetime) => {
+    expect(resolver.resolve({ type: 'serial', options: { ...options } }, lifetime).persistent).toBe(false)
+})
+
 test.each([true, [9600], {}, '', Number.POSITIVE_INFINITY, 0, -1])(
     'serial quick connect rejects unsafe baud value %p',
     baud => expect(resolver.resolve({ type: 'serial', options: { device: '/dev/ttyUSB0', baud } }, 'invalid-baud')).toEqual({
@@ -112,6 +155,34 @@ test('local quick connect preserves endpoint identifier casing for isolation', (
     expect(base.key).not.toBe(shellCase.key)
     expect(base.key).not.toBe(pathCase.key)
     expect(base.key).not.toBe(providerCase.key)
+})
+
+test('current Tabby id-less local profiles persist command, args, and normalized shell type', () => {
+    const baseOptions = { command: ' C:\\Tools\\PowerShell.EXE ', args: ['-NoLogo', '-NoProfile'], shellType: 'POWERSHELL' }
+    const base = resolver.resolve({ type: 'local', options: baseOptions }, 'base-local')
+    expect(base.persistent).toBe(true)
+
+    const command = resolver.resolve({ type: 'local', options: { ...baseOptions, command: 'C:\\tools\\PowerShell.EXE' } }, 'command')
+    const args = resolver.resolve({ type: 'local', options: { ...baseOptions, args: ['-NoLogo'] } }, 'args')
+    const shellType = resolver.resolve({ type: 'local', options: { ...baseOptions, shellType: 'cmd' } }, 'shell-type')
+    expect(command.key).not.toBe(base.key)
+    expect(args.key).not.toBe(base.key)
+    expect(shellType.key).not.toBe(base.key)
+    expect(resolver.resolve({
+        type: 'local', options: { ...baseOptions, shellType: 'powershell' },
+    }, 'normalized-shell-type').key).toBe(base.key)
+})
+
+test.each([
+    [{ args: [], shellType: 'powershell' }, 'missing-command'],
+    [{ command: '', shell: 'legacy', args: [], shellType: 'powershell' }, 'invalid-actual-command'],
+    [{ command: 'pwsh', args: ' -NoLogo ', shellType: 'powershell' }, 'string-args'],
+    [{ command: 'pwsh', args: ['-NoLogo', 42], shellType: 'powershell' }, 'non-string-args'],
+    [{ command: 'pwsh', args: [], shellType: null }, 'invalid-shell-type'],
+    [{ command: 'fish', args: [], shellType: 'fish' }, 'unknown-shell-type'],
+    [{ command: 'custom', args: [], shellType: 'not-a-shell-type' }, 'malformed-shell-type'],
+] as const)('current Tabby local profile %s safely falls back to memory', (options, lifetime) => {
+    expect(resolver.resolve({ type: 'local', options: { ...options } }, lifetime).persistent).toBe(false)
 })
 
 test('ssh quick connect separates explicit ports for the same user and host', () => {

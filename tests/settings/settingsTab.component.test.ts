@@ -63,11 +63,12 @@ function createSettingsFixture (options: {
     activeTab?: unknown
     confirm?: boolean
     resolver?: ConnectionIdentityResolver
+    structuralConfig?: boolean | 'throw-capacity'
     tracker?: ActiveTerminalTracker
     tabs?: unknown[]
 } = {}) {
     const initial = cloneDefaults()
-    const config = {
+    const config = options.structuralConfig ? structuralConfig(initial, options.structuralConfig === 'throw-capacity') : {
         store: { cmdHistory: initial },
         save: jest.fn(async () => undefined),
     }
@@ -91,6 +92,40 @@ function createSettingsFixture (options: {
         tracker,
     )
     return { app, component, config, history, initial, platform, resolver, tracker }
+}
+
+function structuralConfig (initial: ReturnType<typeof cloneDefaults>, throwOnCapacity = false): {
+    store: { cmdHistory: ReturnType<typeof cloneDefaults> }
+    save: jest.Mock<Promise<void>, []>
+} {
+    const weights = { ...initial.weights }
+    const bindings = { ...initial.bindings }
+    const cmdHistory = { ...initial } as Record<string, unknown>
+    Object.defineProperties(cmdHistory, {
+        weights: { enumerable: true, get: () => weights },
+        bindings: { enumerable: true, get: () => bindings },
+    })
+    if (throwOnCapacity) {
+        let capacity = initial.capacity
+        let shouldThrow = true
+        Object.defineProperty(cmdHistory, 'capacity', {
+            enumerable: true,
+            get: () => capacity,
+            set: value => {
+                if (shouldThrow && value !== initial.capacity) {
+                    shouldThrow = false
+                    throw new Error('private leaf failure')
+                }
+                capacity = value as number
+            },
+        })
+    }
+    const store = {} as { cmdHistory: ReturnType<typeof cloneDefaults> }
+    Object.defineProperty(store, 'cmdHistory', { enumerable: true, get: () => cmdHistory })
+    return {
+        store,
+        save: jest.fn(async () => undefined),
+    }
 }
 
 describe('CommandHistorySettingsTabComponent', () => {
@@ -124,6 +159,79 @@ describe('CommandHistorySettingsTabComponent', () => {
         expect(fixture.config.store.cmdHistory).not.toBe(fixture.component.draft)
         expect(fixture.config.save).toHaveBeenCalledTimes(1)
         expect(fixture.component.validationError).toBe('')
+    })
+
+    test('saves every leaf in place through a getter-only structural ConfigProxy', async () => {
+        const fixture = createSettingsFixture({ structuralConfig: true })
+        const root = fixture.config.store.cmdHistory as ReturnType<typeof cloneDefaults>
+        const weights = root.weights
+        const bindings = root.bindings
+        fixture.component.draft = {
+            enabled: false,
+            presentation: 'hybrid',
+            maxVisible: 7,
+            minQueryLength: 2,
+            caseSensitive: true,
+            capacity: 123,
+            captureMode: 'permissive',
+            sensitiveFiltering: false,
+            exclusionPatterns: ['stale'],
+            weights: { recency: 2, frequency: 3, matchCloseness: 5 },
+            bindings: {
+                previous: 'Ctrl+ArrowUp',
+                next: 'Ctrl+ArrowDown',
+                accept: 'Ctrl+ArrowRight',
+                dismiss: 'Escape',
+            },
+            dataRoot: null,
+        }
+        fixture.component.exclusionText = '^private$\nsecret'
+
+        await fixture.component.save()
+
+        expect(fixture.config.store.cmdHistory).toBe(root)
+        expect(root.weights).toBe(weights)
+        expect(root.bindings).toBe(bindings)
+        expect(root).toEqual({
+            ...fixture.component.draft,
+            exclusionPatterns: ['^private$', 'secret'],
+            weights: { recency: 0.2, frequency: 0.3, matchCloseness: 0.5 },
+        })
+        expect(root.exclusionPatterns).not.toBe(fixture.component.draft.exclusionPatterns)
+        expect(fixture.config.save).toHaveBeenCalledTimes(1)
+    })
+
+    test('restores structural ConfigProxy leaves when persistence fails', async () => {
+        const fixture = createSettingsFixture({ structuralConfig: true })
+        const root = fixture.config.store.cmdHistory as ReturnType<typeof cloneDefaults>
+        const before = cloneDefaults()
+        fixture.component.draft.presentation = 'inline'
+        fixture.component.draft.weights = { recency: 1, frequency: 1, matchCloseness: 2 }
+        fixture.component.draft.exclusionPatterns = ['new']
+        fixture.component.exclusionText = 'new'
+        fixture.config.save.mockRejectedValueOnce(new Error('private config path'))
+
+        await fixture.component.save()
+
+        expect(fixture.config.store.cmdHistory).toBe(root)
+        expect(root).toEqual(before)
+        expect(fixture.component.validationError).toBe('Unable to save command history settings.')
+        expect(fixture.component.validationError).not.toContain('private')
+    })
+
+    test('best-effort restores earlier ConfigProxy leaves when a leaf assignment fails', async () => {
+        const fixture = createSettingsFixture({ structuralConfig: 'throw-capacity' })
+        const root = fixture.config.store.cmdHistory as ReturnType<typeof cloneDefaults>
+        const before = cloneDefaults()
+        fixture.component.draft.enabled = false
+        fixture.component.draft.presentation = 'hybrid'
+        fixture.component.draft.capacity = 123
+
+        await fixture.component.save()
+
+        expect(root).toEqual(before)
+        expect(fixture.config.save).not.toHaveBeenCalled()
+        expect(fixture.component.validationError).toBe('Unable to save command history settings.')
     })
 
     test('does not save or expose an invalid exclusion expression', async () => {

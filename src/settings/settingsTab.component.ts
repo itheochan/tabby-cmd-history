@@ -99,16 +99,24 @@ export class CommandHistorySettingsTabComponent {
         }
 
         this.saving = true
-        const previous = this.config.store.cmdHistory
         const installed = cloneConfig(normalized)
-        this.config.store.cmdHistory = installed
+        let target: CommandHistoryConfig | undefined
+        let previous: CommandHistoryConfig | undefined
         try {
+            target = this.config.store.cmdHistory as CommandHistoryConfig | undefined
+            if (!target) {
+                throw new Error('Command history configuration is unavailable')
+            }
+            previous = cloneConfig(target)
+            assignConfigLeaves(target, installed)
             await this.config.save()
             this.draft = cloneConfig(installed)
             this.exclusionText = installed.exclusionPatterns.join('\n')
             this.actionMessage = 'Command history settings saved. Restart Tabby to apply data directory changes.'
         } catch {
-            this.config.store.cmdHistory = previous
+            if (target && previous) {
+                restoreConfigLeaves(target, previous)
+            }
             this.validationError = 'Unable to save command history settings.'
         } finally {
             this.saving = false
@@ -192,6 +200,47 @@ function cloneConfig (config: Readonly<CommandHistoryConfig>): CommandHistoryCon
         weights: { ...config.weights },
         bindings: { ...config.bindings },
     }
+}
+
+function assignConfigLeaves (target: CommandHistoryConfig, source: Readonly<CommandHistoryConfig>): void {
+    for (const assign of configLeafAssignments(target, source)) {
+        assign()
+    }
+}
+
+function restoreConfigLeaves (target: CommandHistoryConfig, source: Readonly<CommandHistoryConfig>): void {
+    for (const assign of configLeafAssignments(target, source)) {
+        try {
+            assign()
+        } catch {
+            // ConfigProxy setters may fail independently; restore every other leaf best-effort.
+        }
+    }
+}
+
+function configLeafAssignments (
+    target: CommandHistoryConfig,
+    source: Readonly<CommandHistoryConfig>,
+): Array<() => void> {
+    return [
+        () => { target.enabled = source.enabled },
+        () => { target.presentation = source.presentation },
+        () => { target.maxVisible = source.maxVisible },
+        () => { target.minQueryLength = source.minQueryLength },
+        () => { target.caseSensitive = source.caseSensitive },
+        () => { target.capacity = source.capacity },
+        () => { target.captureMode = source.captureMode },
+        () => { target.sensitiveFiltering = source.sensitiveFiltering },
+        () => { target.exclusionPatterns = [...source.exclusionPatterns] },
+        () => { target.weights.recency = source.weights.recency },
+        () => { target.weights.frequency = source.weights.frequency },
+        () => { target.weights.matchCloseness = source.weights.matchCloseness },
+        () => { target.bindings.previous = source.bindings.previous },
+        () => { target.bindings.next = source.bindings.next },
+        () => { target.bindings.accept = source.bindings.accept },
+        () => { target.bindings.dismiss = source.bindings.dismiss },
+        () => { target.dataRoot = source.dataRoot },
+    ]
 }
 
 function parseExclusionPatterns (text: string): string[] {

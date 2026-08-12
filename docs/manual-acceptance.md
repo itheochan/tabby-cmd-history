@@ -9,8 +9,8 @@
 | 本机实际载入版 | Tabby 1.0.235（本次隔离 debug 日志中的 core version；与官方版本号相同但证据来源独立） |
 | 操作系统 | Microsoft Windows 10.0.26200，x64 |
 | Node.js | v22.14.0 |
-| 验收对象 | 功能基线 commit `36cd3810d2042aad7cb4e24b95cbfa8ea670fef1` + 本文档所在 Task 12 发布差异 |
-| 自动化基线 | 18 suites / 281 tests；4096 entries query p95 0.204 ms |
+| 验收对象 | 当前 release candidate 源码（含最终审计修复） |
+| 自动化基线 | 18 suites / 305 tests；4096 entries query p95 0.204 ms |
 
 状态含义：
 
@@ -25,11 +25,11 @@
 
 | 项目 | 状态 | 本次证据 |
 |---|---|---|
-| 隔离启动与插件发现 | PASS | 使用仅属于本次任务的临时 `APPDATA`、`LOCALAPPDATA` 和 `--user-data-dir`，并设置 `TABBY_PLUGINS` 为 worktree 绝对路径；debug 日志先后出现 `Found cmd-history` 和 `Loading cmd-history: ...\dist\index.js`。 |
+| 隔离启动与插件发现 | PASS | 使用仅属于本次任务的临时 `APPDATA`、`LOCALAPPDATA` 和 `--user-data-dir`，并用 Tabby 在 Windows 支持的 `/cygdrive/d/...` 绝对路径表达设置 `TABBY_PLUGINS`；debug 日志先后出现 `Found cmd-history` 和 `Loading cmd-history: ...\dist\index.js`。 |
 | Angular module / DI 初始化 | PASS | 插件加载后继续运行 20 秒，日志中未出现 `Could not load cmd-history`、`NullInjectorError`、Angular `NG0...` 或未捕获异常。 |
-| 用户状态保护 | PASS | 启动前已有的 Tabby PID 为 `7364, 24532, 26340, 27740, 41564`；只停止本次启动 PID `56500`，停止后没有本次新增残留进程。未读取或修改用户配置，未向任何终端输入。 |
+| 用户状态保护 | PASS | 最终复验启动前已有的 Tabby PID 为 `7364, 24532, 26340, 27740, 41564`；只停止本次启动 PID `59116`，停止后没有本次新增残留进程。未读取或修改用户配置，未向任何终端输入。 |
 
-首次隔离启动曾真实暴露 `Cannot load package info for tabby-cmd-history`。依据 Tabby 的公开 loader 源码定位为 `package.json` 缺少 `author`，补齐后用全新隔离目录复跑得到以上 PASS。debug 日志在运行时仅写入本次 task temp；核验后相关目录已清理，原始日志未跟踪、未提交。
+Task 12 的首次隔离启动曾真实暴露 `Cannot load package info for tabby-cmd-history`。依据 Tabby 的公开 loader 源码定位为 `package.json` 缺少 `author`，补齐后用全新隔离目录复跑通过。最终审计后又用新隔离目录、当前构建和 `ELECTRON_ENABLE_LOGGING=1` 复验得到以上 PASS。debug 日志在运行时仅写入本次 task temp；核验后相关目录已清理，原始日志未跟踪、未提交。
 
 日志中另有 Chromium DevTools 的 `Autofill.enable` / `Autofill.setAddresses` 协议方法不存在消息；它们没有引用本插件、Angular 或 DI，作为环境噪声记录，不计为插件功能 PASS 或 FAIL。
 

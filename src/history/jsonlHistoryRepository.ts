@@ -13,6 +13,7 @@ import { HistoryEntry, HistoryRepositoryMutation } from './types'
 interface RepositoryOptions {
     compactBytes?: number
     compactEvents?: number
+    compactUseEvents?: number
     fileOperations?: Partial<JsonlHistoryFileOperations>
     warn?: (message: string) => void
 }
@@ -37,6 +38,7 @@ interface KeyState {
     eventCount: number
     fileBytes: number
     storageAvailable: boolean
+    useEventsSinceCompaction: number
 }
 
 interface UseEvent {
@@ -56,6 +58,7 @@ interface EntryEvent {
 
 const KEY_PATTERN = /^[a-f0-9]{64}$/u
 const DEFAULT_COMPACT_BYTES = 2 * 1024 * 1024
+const DEFAULT_COMPACT_USE_EVENTS = 512
 const states = new Map<string, KeyState>()
 const queues = new Map<string, Promise<void>>()
 const warnedFailures = new Set<string>()
@@ -68,7 +71,8 @@ const DEFAULT_FILE_OPERATIONS: JsonlHistoryFileOperations = {
     rm: (path, options) => nodeRm(path, options),
 }
 
-type FailureStage = 'read' | 'append' | 'compact' | 'clear'
+type FailureStage = 'read' | 'replay' | 'append' | 'compact' | 'clear'
+type ReplayLineKind = 'use' | 'entry' | 'invalid'
 
 export class JsonlHistoryRepository {
     readonly updates$: Observable<string>
@@ -77,6 +81,7 @@ export class JsonlHistoryRepository {
     private readonly root: string
     private readonly compactBytes: number
     private readonly compactEvents?: number
+    private readonly compactUseEvents: number
     private readonly fileOperations: JsonlHistoryFileOperations
     private readonly warn?: (message: string) => void
     private readonly updatesSubject = new Subject<string>()
@@ -86,6 +91,7 @@ export class JsonlHistoryRepository {
         this.root = resolve(root)
         this.compactBytes = options.compactBytes ?? DEFAULT_COMPACT_BYTES
         this.compactEvents = options.compactEvents
+        this.compactUseEvents = normalizePositiveThreshold(options.compactUseEvents, DEFAULT_COMPACT_USE_EVENTS)
         this.fileOperations = { ...DEFAULT_FILE_OPERATIONS, ...options.fileOperations }
         this.warn = options.warn
         this.updates$ = this.updatesSubject.asObservable()
@@ -124,6 +130,7 @@ export class JsonlHistoryRepository {
                     await this.fileOperations.appendFile(file, line, 'utf8')
                     state.eventCount += 1
                     state.fileBytes += Buffer.byteLength(line)
+                    state.useEventsSinceCompaction += 1
                 } catch {
                     state.storageAvailable = false
                     this.warnStorageFailure(key, 'append')
@@ -134,6 +141,7 @@ export class JsonlHistoryRepository {
                         await compact(file, state.entries, this.fileOperations)
                         state.eventCount = state.entries.size
                         state.fileBytes = compactedBytes(state.entries)
+                        state.useEventsSinceCompaction = 0
                     } catch {
                         this.warnStorageFailure(key, 'compact')
                     }
@@ -179,8 +187,15 @@ export class JsonlHistoryRepository {
             state.fileBytes = Buffer.byteLength(contents)
             for (const line of contents.split(/\r?\n/u)) {
                 if (line) {
+                    const replayed = replayLine(state.entries, line)
+                    if (replayed === 'invalid') {
+                        this.warnStorageFailure(key, 'replay')
+                        continue
+                    }
                     state.eventCount += 1
-                    replayLine(state.entries, line)
+                    state.useEventsSinceCompaction = replayed === 'entry'
+                        ? 0
+                        : state.useEventsSinceCompaction + 1
                 }
             }
         } catch (error) {
@@ -195,7 +210,8 @@ export class JsonlHistoryRepository {
 
     private shouldCompact (state: KeyState, capacity: number): boolean {
         const eventLimit = this.compactEvents ?? Math.max(1, normalizedCapacity(capacity) * 2)
-        return state.eventCount >= eventLimit || state.fileBytes >= this.compactBytes
+        return state.eventCount >= eventLimit ||
+            (state.fileBytes >= this.compactBytes && state.useEventsSinceCompaction >= this.compactUseEvents)
     }
 
     private warnStorageFailure (key: string, stage: FailureStage): void {
@@ -208,7 +224,7 @@ export class JsonlHistoryRepository {
         }
         warnedFailures.add(warningKey)
         try {
-            this.warn(`Command history storage is unavailable at stage ${stage} for connection ${key}`)
+            this.warn(`Command history storage issue at stage ${stage} for connection ${key}`)
         } catch {
             // Diagnostics must never interrupt terminal history updates.
         }
@@ -253,20 +269,23 @@ async function compact (
     }
 }
 
-function replayLine (entries: Map<string, HistoryEntry>, line: string): void {
+function replayLine (entries: Map<string, HistoryEntry>, line: string): ReplayLineKind {
     try {
         const event: unknown = JSON.parse(line)
         if (isUseEvent(event)) {
             applyUse(entries, normalizeCommand(event.command), event.at)
+            return 'use'
         } else if (isEntryEvent(event)) {
             const command = normalizeCommand(event.command)
             if (command) {
                 mergeContribution(entries, command, event.lastUsedAt, event.useCount)
+                return 'entry'
             }
         }
     } catch {
         // A damaged line is isolated from the rest of the append-only log.
     }
+    return 'invalid'
 }
 
 function applyUse (entries: Map<string, HistoryEntry>, command: string, at: string): void {
@@ -295,6 +314,10 @@ function normalizedCapacity (capacity: number): number {
     return Number.isFinite(capacity) ? Math.max(0, Math.floor(capacity)) : 0
 }
 
+function normalizePositiveThreshold (value: number | undefined, fallback: number): number {
+    return value !== undefined && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback
+}
+
 function normalizeCommand (command: string): string {
     return command.replace(/\r\n?/gu, '\n').trim()
 }
@@ -321,7 +344,7 @@ function temporaryFileFor (file: string): string {
 }
 
 function emptyState (storageAvailable: boolean): KeyState {
-    return { entries: new Map(), eventCount: 0, fileBytes: 0, storageAvailable }
+    return { entries: new Map(), eventCount: 0, fileBytes: 0, storageAvailable, useEventsSinceCompaction: 0 }
 }
 
 function isUseEvent (value: unknown): value is UseEvent {

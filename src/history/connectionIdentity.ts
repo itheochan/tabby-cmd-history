@@ -118,6 +118,18 @@ function resolveSshCanonical (options: Record<string, unknown>): string | undefi
 }
 
 function resolveSerialCanonical (options: Record<string, unknown>): string | undefined {
+    if (hasAnyOwnProperty(options, ['port', 'baudrate', 'databits', 'stopbits', 'parity'])) {
+        const port = normalizeText(options.port)
+        const baudrate = normalizeBaud(options.baudrate)
+        const databits = normalizeSerialDataBits(options.databits)
+        const stopbits = normalizeSerialStopBits(options.stopbits)
+        const parity = normalizeSerialParity(options.parity)
+        if (!port || !baudrate || !databits || !stopbits || !parity) {
+            return undefined
+        }
+        return ['serial', port, baudrate, databits, stopbits, parity].join('\0')
+    }
+
     const device = normalizeText(options.device)
     const baud = normalizeBaud(options.baud)
     if (!device || !baud) {
@@ -127,6 +139,16 @@ function resolveSerialCanonical (options: Record<string, unknown>): string | und
 }
 
 function resolveLocalCanonical (options: Record<string, unknown>): string | undefined {
+    if (hasAnyOwnProperty(options, ['command', 'args', 'shellType'])) {
+        const command = normalizeText(options.command)
+        const args = normalizeLocalArgs(options.args)
+        const shellType = normalizeLocalShellType(options.shellType)
+        if (!command || !args || !shellType) {
+            return undefined
+        }
+        return JSON.stringify({ args, command, shellType, type: 'local' })
+    }
+
     const shell = normalizeText(options.shell)
     if (!shell) {
         return undefined
@@ -174,7 +196,7 @@ function normalizePort (value: unknown): string | undefined {
 
 function normalizeBaud (value: unknown): string | undefined {
     if (typeof value === 'number') {
-        return Number.isFinite(value) && value > 0 ? String(value) : undefined
+        return Number.isSafeInteger(value) && value > 0 ? String(value) : undefined
     }
     if (typeof value !== 'string') {
         return undefined
@@ -184,7 +206,65 @@ function normalizeBaud (value: unknown): string | undefined {
         return undefined
     }
     const baud = Number(text)
-    return Number.isFinite(baud) && baud > 0 ? String(baud) : undefined
+    return Number.isSafeInteger(baud) && baud > 0 ? String(baud) : undefined
+}
+
+function normalizeSerialDataBits (value: unknown): string | undefined {
+    if (value === undefined) {
+        return '8'
+    }
+    const normalized = normalizeNumericDimension(value)
+    return normalized !== undefined && [5, 6, 7, 8].includes(normalized) ? String(normalized) : undefined
+}
+
+function normalizeSerialStopBits (value: unknown): string | undefined {
+    if (value === undefined) {
+        return '1'
+    }
+    const normalized = normalizeNumericDimension(value)
+    return normalized !== undefined && [1, 1.5, 2].includes(normalized) ? String(normalized) : undefined
+}
+
+function normalizeNumericDimension (value: unknown): number | undefined {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : undefined
+    }
+    if (typeof value !== 'string') {
+        return undefined
+    }
+    const text = value.trim()
+    if (!/^(?:\d+|\d+\.\d+)$/u.test(text)) {
+        return undefined
+    }
+    const normalized = Number(text)
+    return Number.isFinite(normalized) ? normalized : undefined
+}
+
+function normalizeSerialParity (value: unknown): string | undefined {
+    if (value === undefined) {
+        return 'none'
+    }
+    const normalized = normalizeText(value).toLowerCase()
+    return ['none', 'even', 'odd', 'mark', 'space'].includes(normalized) ? normalized : undefined
+}
+
+function normalizeLocalArgs (value: unknown): string[] | undefined {
+    if (value === undefined) {
+        return []
+    }
+    if (!Array.isArray(value) || value.some(argument => typeof argument !== 'string')) {
+        return undefined
+    }
+    return [...value] as string[]
+}
+
+function normalizeLocalShellType (value: unknown): string | undefined {
+    const normalized = normalizeText(value).toLowerCase()
+    return ['unix', 'powershell', 'cmd'].includes(normalized) ? normalized : undefined
+}
+
+function hasAnyOwnProperty (value: Record<string, unknown>, keys: string[]): boolean {
+    return keys.some(key => Object.prototype.hasOwnProperty.call(value, key))
 }
 
 function sanitizeOptions (value: unknown, ancestors = new WeakSet<object>()): SafeValue | undefined {

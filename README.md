@@ -74,7 +74,8 @@
 
 - 保存的 profile 使用稳定的 profile type 和 ID，重命名不会合并或移动历史。
 - SSH Quick Connect 使用规范化的用户、主机和实际端口。
-- 临时 local/serial connection 只使用已知的稳定 shell/path/provider 或 device/baud 维度。
+- 当前 Tabby 的临时 Serial connection 保留 `port` 大小写，并使用规范化的 `baudrate`、`databits`、`stopbits` 和 `parity`；旧 `device/baud` shape 仅保留兼容。
+- 当前 Tabby 的临时 Local connection 保留 `command` 与各项 `args` 的文本和大小写，并规范化 `shellType`；旧 `path/provider/shell` shape 仅保留兼容。
 - generic provider 仅在 type、稳定名称及递归清理后的安全 options 足以形成稳定身份时持久化。
 - 密码、Token、私钥、环境变量值、当前目录、窗口大小、PID、PTY/session 恢复信息等会从 generic identity 输入中移除。
 - 无法安全、稳定解析时退化为该 terminal 对象生命周期内的 `memory-only` key，绝不读取其他 connection 的文件。
@@ -106,6 +107,8 @@
 ```
 
 加载会跳过损坏、未知或最后一行被截断的 JSONL 记录，并继续使用其余有效记录。追加或读取不可用时，插件按 connection 保留本进程内的 memory-only 历史，并对同一 connection/阶段最多记录一次不包含原始命令的警告；输入链路继续 fail-open。清空文件失败时设置页会显示失败，不会声称已清空持久化历史。
+
+JSONL 在事件数达到容量阈值时压缩；文件超过 2 MiB 时，还必须自上次成功压缩后累计 512 条成功写入的 `use` 事件才会再次压缩，避免大文件在每次追加后重复改写。
 
 卸载插件不会自动删除历史。若要删除数据，请先关闭 Tabby，确认是否需要备份，然后用文件管理器手工删除上述默认目录或设置过的自定义目录；插件和安装流程不会替你执行删除。
 
@@ -153,7 +156,7 @@ npm run verify
 
 `npm run verify` 依次执行 ESLint、插件与测试 TypeScript 类型检查、Jest、production webpack build 和真实 `npm pack --dry-run --json` allowlist 检查。发布包只允许 `dist/**`、`README.md`、`LICENSE` 和 `package.json`。
 
-2026-08-13 的自动化基线为 18 个 suite、281 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收。发布包不包含 `docs/`；请从源码 checkout 查看 `docs/manual-acceptance.md` 中的真实环境状态和复验步骤。
+2026-08-13 的自动化基线为 18 个 suite、305 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收。发布包不包含 `docs/`；请从源码 checkout 查看 `docs/manual-acceptance.md` 中的真实环境状态和复验步骤。
 
 ## 界面截图
 
