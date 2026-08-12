@@ -6,11 +6,11 @@
 
 **Architecture:** 使用 `TerminalDecorator` 为每个终端 session 注入输入 middleware，由纯 TypeScript 状态机重建命令缓冲；connection 级单例服务在内存中匹配并通过独立 JSONL 文件持久化。xterm 几何适配器与 DOM overlay 只负责展示，设置组件通过 Tabby `ConfigProvider` 和 `SettingsTabProvider` 接入。
 
-**Tech Stack:** TypeScript 4.9、Angular 15、RxJS 7、Tabby 1.0.234 1.x API、xterm、Webpack 5、Jest 29、ts-jest、ESLint、Pug、SCSS、Node.js 文件系统 API。
+**Tech Stack:** TypeScript 4.9、Angular 15、RxJS 7、Tabby 1.0.231-nightly.0 1.x API、xterm、Webpack 5、Jest 29、ts-jest、ESLint、Pug、SCSS、Node.js 文件系统 API。
 
 ## Global Constraints
 
-- 支持 Windows、macOS 和 Linux 上的 Tabby 桌面端 1.0.234 或更高 1.x 版本；不支持 Tabby Web。
+- 支持 Windows、macOS 和 Linux 上的 Tabby 桌面端 1.0.231-nightly.0 或更高 1.x 版本；不支持 Tabby Web。
 - 历史只保存在用户数据目录，默认根目录分别为 `%APPDATA%\tabby\cmd-history`、`~/Library/Application Support/tabby/cmd-history`、`${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history`。
 - 每个 connection 使用独立 `connections/<sha256>.jsonl`；任何查询、追加、压缩和清空接口都必须显式接收 connection key。
 - 默认展示模式为 B（list），同时完整提供 A（inline）和 C（hybrid）。
@@ -133,9 +133,9 @@
     "@angular/forms": "^15.2.0",
     "@ng-bootstrap/ng-bootstrap": "^14.1.0",
     "rxjs": "^7.5.0",
-    "tabby-core": "^1.0.234",
-    "tabby-settings": "^1.0.234",
-    "tabby-terminal": "^1.0.234"
+    "tabby-core": "1.0.231-nightly.0",
+    "tabby-settings": "1.0.231-nightly.0",
+    "tabby-terminal": "1.0.231-nightly.0"
   },
   "devDependencies": {
     "@angular/common": "^15.2.6",
@@ -151,15 +151,15 @@
     "eslint": "^8.57.1",
     "jest": "^29.7.0",
     "jest-environment-jsdom": "^29.7.0",
-    "pug": "^3.0.3",
+    "pug": "^2.0.4",
     "pug-loader": "^2.4.0",
     "rxjs": "^7.5.7",
     "sass": "^1.77.0",
     "sass-loader": "^13.3.3",
     "style-loader": "^3.3.4",
-    "tabby-core": "^1.0.234",
-    "tabby-settings": "^1.0.234",
-    "tabby-terminal": "^1.0.234",
+    "tabby-core": "1.0.231-nightly.0",
+    "tabby-settings": "1.0.231-nightly.0",
+    "tabby-terminal": "1.0.231-nightly.0",
     "ts-jest": "^29.2.5",
     "ts-loader": "^9.5.1",
     "typescript": "4.9.5",

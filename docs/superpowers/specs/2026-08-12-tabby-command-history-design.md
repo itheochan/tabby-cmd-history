@@ -48,7 +48,7 @@
 - 通过 `TerminalDecorator` 注册 `CommandHistoryTerminalDecorator`。
 - 用于身份解析、仓储访问、匹配、过滤和运行时协调的单例服务。
 
-插件面向 Tabby 桌面端 1.x API 线中的 1.0.234 或更高版本，并尽可能只使用 `tabby-core`、`tabby-terminal` 和 `tabby-settings` 导出的公共 API。
+插件面向 Tabby 桌面端 1.x API 线中的 1.0.231-nightly.0 或更高版本，并尽可能只使用 `tabby-core`、`tabby-terminal` 和 `tabby-settings` 导出的公共 API。
 
 ### 4.2 单终端运行时
 

@@ -1,0 +1,79 @@
+export type PresentationMode = 'inline' | 'list' | 'hybrid'
+export type CaptureMode = 'strict' | 'permissive'
+export type HistoryKeyName = 'ArrowUp' | 'ArrowDown' | 'ArrowRight' | 'Escape' |
+    'Ctrl+ArrowUp' | 'Ctrl+ArrowDown' | 'Ctrl+ArrowRight'
+
+export interface CommandHistoryConfig {
+    enabled: boolean
+    presentation: PresentationMode
+    maxVisible: number
+    minQueryLength: number
+    caseSensitive: boolean
+    capacity: number
+    captureMode: CaptureMode
+    sensitiveFiltering: boolean
+    exclusionPatterns: string[]
+    weights: { recency: number; frequency: number; matchCloseness: number }
+    bindings: { previous: HistoryKeyName; next: HistoryKeyName; accept: HistoryKeyName; dismiss: HistoryKeyName }
+    dataRoot: string | null
+}
+
+export const DEFAULT_COMMAND_HISTORY_CONFIG: Readonly<CommandHistoryConfig> = Object.freeze<CommandHistoryConfig>({
+    enabled: true,
+    presentation: 'list',
+    maxVisible: 5,
+    minQueryLength: 1,
+    caseSensitive: false,
+    capacity: 4096,
+    captureMode: 'strict',
+    sensitiveFiltering: true,
+    exclusionPatterns: [],
+    weights: { recency: 0.55, frequency: 0.30, matchCloseness: 0.15 },
+    bindings: { previous: 'ArrowUp', next: 'ArrowDown', accept: 'ArrowRight', dismiss: 'Escape' },
+    dataRoot: null,
+})
+
+export function validateHistoryConfig (config: CommandHistoryConfig): CommandHistoryConfig {
+    validateLimit('maxVisible', config.maxVisible, 1, 20)
+    validateLimit('minQueryLength', config.minQueryLength, 1, 20)
+    validateLimit('capacity', config.capacity, 1, 100000)
+    validateBindings(config.bindings)
+
+    const totalWeight = config.weights.recency + config.weights.frequency + config.weights.matchCloseness
+    if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+        throw new Error('Weights must have a positive total')
+    }
+
+    return {
+        ...config,
+        exclusionPatterns: [...config.exclusionPatterns],
+        weights: {
+            recency: config.weights.recency / totalWeight,
+            frequency: config.weights.frequency / totalWeight,
+            matchCloseness: config.weights.matchCloseness / totalWeight,
+        },
+        bindings: { ...config.bindings },
+    }
+}
+
+function validateLimit (name: string, value: number, minimum: number, maximum: number): void {
+    if (!Number.isInteger(value) || value < minimum || value > maximum) {
+        throw new Error(`${name} must be an integer between ${minimum} and ${maximum}`)
+    }
+}
+
+function validateBindings (bindings: CommandHistoryConfig['bindings']): void {
+    for (const binding of Object.values(bindings)) {
+        const bindingName: string = binding
+        if (bindingName === 'Ctrl+C') {
+            throw new Error('Ctrl+C cannot be used as a command history binding')
+        }
+        if (isPrintableCharacter(bindingName)) {
+            throw new Error(`Printable character cannot be used as a command history binding: ${bindingName}`)
+        }
+    }
+}
+
+function isPrintableCharacter (binding: string): boolean {
+    return [...binding].length === 1 && !/[\u0000-\u001F\u007F]/u.test(binding)
+}

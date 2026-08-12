@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "declaration": false, "outDir": ".test-dist", "types": ["jest", "node"] },
+  "include": ["src/**/*.ts", "tests/**/*.ts"]
+}
