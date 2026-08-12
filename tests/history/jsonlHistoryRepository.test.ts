@@ -44,6 +44,23 @@ test('skips corrupt lines and evicts least recently used', async () => {
     ])
 })
 
+test('replay sums normalized-equivalent entries and uses while retaining the newest timestamp', async () => {
+    const root = await makeRoot()
+    const key = '6'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    await mkdir(join(root, 'connections'), { recursive: true })
+    await writeFile(file, [
+        JSON.stringify({ v: 1, kind: 'use', command: ' git status\r\n', at: '2026-08-12T10:00:00Z' }),
+        JSON.stringify({ v: 1, kind: 'entry', command: 'git status', lastUsedAt: '2026-08-12T09:00:00Z', useCount: 3 }),
+        JSON.stringify({ v: 1, kind: 'entry', command: '\tgit status ', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 2 }),
+        JSON.stringify({ v: 1, kind: 'use', command: 'git status', at: '2026-08-12T08:00:00Z' }),
+    ].join('\n'))
+
+    expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual([
+        { command: 'git status', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 7 },
+    ])
+})
+
 test('clear removes only one connection', async () => {
     const root = await makeRoot()
     const repo = new JsonlHistoryRepository(root)
@@ -100,6 +117,40 @@ test('serializes concurrent writes for the same connection key', async () => {
     expect(lines.map(line => JSON.parse(line))).toHaveLength(20)
 })
 
+test('serializes a same-key clear after an already queued record across repository instances', async () => {
+    const root = await makeRoot()
+    const key = '9'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    const first = new JsonlHistoryRepository(root)
+    const second = new JsonlHistoryRepository(root)
+
+    const recording = first.record(key, 'recorded before clear', new Date('2026-08-12T10:00:00Z'), 10)
+    const clearing = second.clear(key)
+    await Promise.all([recording, clearing])
+
+    await expect(readFile(file, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    jest.resetModules()
+    const { JsonlHistoryRepository: RestartedRepository } = await import('../../src/history/jsonlHistoryRepository')
+    expect(await new RestartedRepository(root).load(key, 10)).toEqual([])
+})
+
+test('serializes a same-key record after an already queued clear across repository instances', async () => {
+    const root = await makeRoot()
+    const key = 'a'.repeat(64)
+    const first = new JsonlHistoryRepository(root)
+    const second = new JsonlHistoryRepository(root)
+
+    const clearing = first.clear(key)
+    const recording = second.record(key, 'recorded after clear', new Date('2026-08-12T10:00:00Z'), 10)
+    await Promise.all([clearing, recording])
+
+    jest.resetModules()
+    const { JsonlHistoryRepository: RestartedRepository } = await import('../../src/history/jsonlHistoryRepository')
+    expect(await new RestartedRepository(root).load(key, 10)).toEqual([
+        { command: 'recorded after clear', lastUsedAt: '2026-08-12T10:00:00.000Z', useCount: 1 },
+    ])
+})
+
 test('normalizes commands before aggregating and retains the most recent unique commands', async () => {
     const root = await makeRoot()
     const repo = new JsonlHistoryRepository(root)
@@ -146,37 +197,104 @@ test('compacts events into aggregate entries', async () => {
     expect((await readdir(join(root, 'connections'))).filter(name => name.includes('.tmp'))).toEqual([])
 })
 
-test('keeps memory history and warns once without command text when storage is unavailable', async () => {
-    const parent = await makeRoot()
-    const blocker = join(parent, 'not-a-directory')
-    await writeFile(blocker, 'x')
+test('compacts by byte threshold independently of the event threshold', async () => {
+    const root = await makeRoot()
+    const key = 'b'.repeat(64)
+    const repo = new JsonlHistoryRepository(root, { compactBytes: 1, compactEvents: 100 })
+
+    await repo.record(key, 'one', new Date('2026-08-12T10:00:00Z'), 10)
+
+    const records = (await readFile(join(root, 'connections', `${key}.jsonl`), 'utf8'))
+        .trim().split('\n').map(line => JSON.parse(line))
+    expect(records).toEqual([
+        expect.objectContaining({ kind: 'entry', command: 'one', useCount: 1 }),
+    ])
+})
+
+test('keeps memory history and warns once for repeated read failures without command text', async () => {
+    const root = await makeRoot()
     const warn = jest.fn()
     const key = '0'.repeat(64)
-    const repo = new JsonlHistoryRepository(join(blocker, 'child'), { warn })
+    const repo = new JsonlHistoryRepository(root, {
+        warn,
+        fileOperations: {
+            readFile: async () => { throw Object.assign(new Error('read unavailable'), { code: 'EACCES' }) },
+        },
+    })
 
     await expect(repo.record(key, 'one', new Date('2026-08-12T10:00:00Z'), 10)).resolves.toHaveLength(1)
     await expect(repo.record(key, 'two', new Date('2026-08-12T11:00:00Z'), 10)).resolves.toHaveLength(2)
 
     expect(await repo.load(key, 10)).toHaveLength(2)
     expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toContain('stage read')
     expect(warn.mock.calls.flat().join(' ')).not.toMatch(/one|two/u)
 })
 
-test('keeps the original log when compaction cannot replace it', async () => {
+test('warns once per key and failure stage without leaking command text', async () => {
+    const root = await makeRoot()
+    const secondRoot = await makeRoot()
+    const warn = jest.fn()
+    const key = '7'.repeat(64)
+    const options = {
+        warn,
+        fileOperations: {
+            appendFile: async () => { throw new Error('append unavailable') },
+            rm: async () => { throw new Error('clear unavailable') },
+        },
+    }
+    const repo = new JsonlHistoryRepository(root, options)
+    const sameKeyAtAnotherRoot = new JsonlHistoryRepository(secondRoot, options)
+
+    await repo.record(key, 'first secret command', new Date('2026-08-12T10:00:00Z'), 10)
+    await repo.record(key, 'second secret command', new Date('2026-08-12T11:00:00Z'), 10)
+    await sameKeyAtAnotherRoot.record(key, 'third secret command', new Date('2026-08-12T12:00:00Z'), 10)
+    await repo.clear(key)
+    await repo.clear(key)
+
+    expect(warn.mock.calls.map(call => call[0])).toEqual([
+        expect.stringContaining('stage append'),
+        expect.stringContaining('stage clear'),
+    ])
+    expect(warn.mock.calls.flat().join(' ')).not.toMatch(/first|second|secret|command/u)
+})
+
+test('preserves source bytes and unrelated temp files when rename fails after compaction sync', async () => {
     const root = await makeRoot()
     const key = '5'.repeat(64)
     const file = join(root, 'connections', `${key}.jsonl`)
+    const otherTemp = join(root, 'connections', `${'8'.repeat(64)}.jsonl.compact.tmp`)
     const warn = jest.fn()
-    const repo = new JsonlHistoryRepository(root, { compactEvents: 1, warn })
+    let bytesAtRename = ''
+    const repo = new JsonlHistoryRepository(root, {
+        compactEvents: 2,
+        warn,
+        fileOperations: {
+            rename: async () => {
+                bytesAtRename = await readFile(file, 'utf8')
+                throw new Error('rename unavailable')
+            },
+        },
+    })
 
     await mkdir(join(root, 'connections'), { recursive: true })
     await writeFile(file, `${JSON.stringify({ v: 1, kind: 'use', command: 'existing', at: '2026-08-12T09:00:00Z' })}\n`)
-    await mkdir(`${file}.compact.tmp`)
+    await writeFile(otherTemp, 'unrelated')
     await repo.record(key, 'new', new Date('2026-08-12T10:00:00Z'), 10)
 
-    expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual(expect.arrayContaining([
+    expect(bytesAtRename).not.toBe('')
+    expect(await readFile(file, 'utf8')).toBe(bytesAtRename)
+    expect(await readFile(otherTemp, 'utf8')).toBe('unrelated')
+    expect(await readdir(join(root, 'connections'))).not.toContain(`${key}.jsonl.compact.tmp`)
+    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage compact')])
+
+    jest.resetModules()
+    const { JsonlHistoryRepository: RestartedRepository } = await import('../../src/history/jsonlHistoryRepository')
+    expect(await new RestartedRepository(root).load(key, 10)).toEqual(expect.arrayContaining([
         expect.objectContaining({ command: 'existing' }),
         expect.objectContaining({ command: 'new' }),
     ]))
-    expect(warn).toHaveBeenCalledTimes(1)
+
+    await repo.record(key, 'later', new Date('2026-08-12T11:00:00Z'), 10)
+    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage compact')])
 })
