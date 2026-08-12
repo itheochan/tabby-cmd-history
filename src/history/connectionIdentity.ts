@@ -64,7 +64,7 @@ export function resolveDefaultDataRoot (
 
 function resolveSshCanonical (options: Record<string, unknown>): string | undefined {
     const host = normalizeText(options.host).toLowerCase()
-    const user = normalizeText(options.user).toLowerCase()
+    const user = normalizeText(options.user)
     const port = normalizePort(options.port)
     if (!host || !user || !port) {
         return undefined
@@ -110,8 +110,21 @@ function normalizeText (value: unknown): string {
 }
 
 function normalizePort (value: unknown): string | undefined {
-    const port = value === undefined || value === null || value === '' ? 22 : Number(value)
-    return Number.isInteger(port) && port >= 1 && port <= 65535 ? String(port) : undefined
+    if (value === undefined) {
+        return '22'
+    }
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && Number.isInteger(value) && value >= 1 && value <= 65535 ? String(value) : undefined
+    }
+    if (typeof value !== 'string') {
+        return undefined
+    }
+    const text = value.trim()
+    if (!/^\d+$/u.test(text)) {
+        return undefined
+    }
+    const port = Number(text)
+    return Number.isFinite(port) && Number.isInteger(port) && port >= 1 && port <= 65535 ? String(port) : undefined
 }
 
 function normalizeBaud (value: unknown): string | undefined {

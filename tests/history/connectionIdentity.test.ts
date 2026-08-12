@@ -74,6 +74,28 @@ test('ssh quick connect separates explicit ports for the same user and host', ()
     expect(a.key).not.toBe(b.key)
 })
 
+test('ssh quick connect preserves user casing while normalizing host casing', () => {
+    const upper = resolver.resolve({ type: 'ssh', options: { user: 'Alice', host: 'EXAMPLE.COM', port: 22 } }, 'upper')
+    const lower = resolver.resolve({ type: 'ssh', options: { user: 'alice', host: 'example.com', port: 22 } }, 'lower')
+    expect(upper.persistent).toBe(true)
+    expect(lower.persistent).toBe(true)
+    expect(upper.key).not.toBe(lower.key)
+})
+
+test.each([true, [22], {}, '', '22x', Number.POSITIVE_INFINITY, 0, -1, 65536])(
+    'ssh quick connect rejects unsafe port value %p',
+    port => expect(resolver.resolve({ type: 'ssh', options: { user: 'root', host: 'example.com', port } }, 'invalid-port')).toEqual({
+        key: 'memory:invalid-port', persistent: false, label: 'Temporary terminal',
+    }),
+)
+
+test('ssh port and serial baud accept digits-only numeric strings', () => {
+    const ssh = resolver.resolve({ type: 'ssh', options: { user: 'root', host: 'example.com', port: '2222' } }, 'ssh')
+    const serial = resolver.resolve({ type: 'serial', options: { device: '/dev/ttyUSB0', baud: '9600' } }, 'serial')
+    expect(ssh.persistent).toBe(true)
+    expect(serial.persistent).toBe(true)
+})
+
 test('other providers discard sensitive and session-only options before sorting', () => {
     const a = resolver.resolve({
         type: 'docker', name: 'engine', options: { host: 'daemon', nested: { keep: true, token: 'one' }, pid: 10 },
