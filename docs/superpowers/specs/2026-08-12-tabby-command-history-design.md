@@ -1,80 +1,80 @@
-# Tabby Command History Plugin Design
+# Tabby 命令历史插件设计
 
-## 1. Product Goal
+## 1. 产品目标
 
-Build a desktop Tabby plugin that learns commands entered in terminal tabs, stores them in the operating system's per-user data directory, isolates history by Tabby connection, and predicts matching commands while the user edits a command line. A user can browse and adopt a prediction, but adoption never executes the command.
+构建一个运行于 Tabby 桌面端的插件，用于学习用户在终端标签页中输入的命令，将历史保存在操作系统的用户数据目录中，按 Tabby connection 隔离，并在用户编辑命令行时预测匹配的历史命令。用户可以浏览和采纳预测，但采纳操作绝不执行命令。
 
-The behavior is inspired by the history prediction features of PowerShell PSReadLine, adapted to Tabby's terminal and plugin APIs rather than tied to PowerShell.
+该功能参考 PowerShell PSReadLine 的历史预测体验，但基于 Tabby 的终端与插件 API 实现，不与 PowerShell 绑定。
 
-## 2. Supported Scope
+## 2. 支持范围
 
-The first complete release supports Tabby desktop on Windows, macOS, and Linux and attaches to every `BaseTerminalTabComponent` that exposes a writable terminal session and an xterm-compatible frontend.
+首个完整版本支持 Windows、macOS 和 Linux 上的 Tabby 桌面端，并接入所有提供可写终端 session 和 xterm 兼容 frontend 的 `BaseTerminalTabComponent`。
 
-It includes:
+包含以下功能：
 
-- Generic command-buffer reconstruction without modifying the local or remote shell.
-- Per-connection persistence and in-memory matching.
-- Three configurable prediction presentations.
-- Configurable matching, ranking, key bindings, capacity, and sensitive-command filtering.
-- A settings action that clears only the active connection's history after confirmation.
-- An extension interface for future PowerShell, Bash, and Zsh command-boundary hooks.
+- 无需修改本地或远端 Shell 的通用命令缓冲区重建。
+- 按 connection 持久化，并在内存中完成匹配。
+- 三种可配置的预测展示模式。
+- 可配置的匹配、排序、快捷键、容量及敏感命令过滤。
+- 在设置中经确认后仅清空当前 connection 历史。
+- 为未来 PowerShell、Bash 和 Zsh 命令边界 hook 预留扩展接口。
 
-It does not include:
+不包含以下功能：
 
-- Cross-connection recommendations or a global history pool.
-- A history browser, bulk editor, cross-connection cleanup, import, or export UI.
-- Shell hook implementations in the first release.
-- Tabby Web, because browser plugins cannot satisfy the required native per-user filesystem persistence.
-- Guaranteed capture after the shell performs an edit that Tabby cannot observe, such as shell-native completion that rewrites the line.
-- Exact detection of shell continuation prompts in generic mode. Without an enhanced shell hook, an Enter-delimited continuation can be learned as separate submitted lines rather than one executed command.
+- 跨 connection 推荐或全局历史池。
+- 历史浏览器、批量编辑、跨 connection 清理、导入或导出界面。
+- 首个版本中的 Shell hook 实现。
+- Tabby Web，因为浏览器插件无法满足原生用户目录文件持久化要求。
+- Shell 执行插件无法观察的编辑后仍保证捕获准确，例如 Shell 原生补全重写命令行。
+- 在通用模式下精确识别 Shell 续行提示。没有增强 Shell hook 时，按 Enter 分隔的续行可能被学习为多条提交记录，而不是一条实际执行命令。
 
-## 3. Design Principles
+## 3. 设计原则
 
-1. Terminal input is fail-open. Plugin failure must never prevent a byte from reaching the terminal unless that byte is a currently active, documented history-navigation binding.
-2. Connection isolation is enforced at the repository boundary, not only by filtering UI results.
-3. No disk access occurs on the per-keystroke query path.
-4. A command is not persisted unless capture is confident, visible-echo safety passes, and the sensitive-command policy accepts it.
-5. Prediction adoption edits the current line and never appends Enter or another command terminator.
-6. Core capture, matching, ranking, and persistence remain independent of Angular and xterm rendering details.
+1. 终端输入必须 fail-open。除非某个字节当前对应已启用且有明确文档的历史导航快捷键，否则插件故障不得阻止该字节到达终端。
+2. connection 隔离必须在仓储边界执行，不能只依靠 UI 结果过滤。
+3. 每次按键触发的查询链路不得访问磁盘。
+4. 只有捕获结果可信、通过可见回显安全检查且敏感命令策略允许时，命令才可持久化。
+5. 采纳预测只编辑当前行，绝不追加 Enter 或其他命令终止符。
+6. 捕获、匹配、排序及持久化核心逻辑与 Angular 和 xterm 渲染细节相互独立。
 
-## 4. Architecture
+## 4. 架构
 
-### 4.1 Tabby module
+### 4.1 Tabby 模块
 
-The plugin exports a single Angular `NgModule` and registers:
+插件导出单一 Angular `NgModule`，并注册：
 
-- `CommandHistoryConfigProvider` through Tabby's `ConfigProvider` extension point.
-- `CommandHistorySettingsTabProvider` through `SettingsTabProvider`.
-- `CommandHistoryTerminalDecorator` through `TerminalDecorator`.
-- Singleton services for identity resolution, repository access, matching, filtering, and runtime coordination.
+- 通过 Tabby `ConfigProvider` 扩展点注册 `CommandHistoryConfigProvider`。
+- 通过 `SettingsTabProvider` 注册 `CommandHistorySettingsTabProvider`。
+- 通过 `TerminalDecorator` 注册 `CommandHistoryTerminalDecorator`。
+- 用于身份解析、仓储访问、匹配、过滤和运行时协调的单例服务。
 
-The plugin targets Tabby desktop 1.0.234 or newer within the 1.x API line and uses the public APIs exported by `tabby-core`, `tabby-terminal`, and `tabby-settings` wherever possible.
+插件面向 Tabby 桌面端 1.x API 线中的 1.0.234 或更高版本，并尽可能只使用 `tabby-core`、`tabby-terminal` 和 `tabby-settings` 导出的公共 API。
 
-### 4.2 Per-terminal runtime
+### 4.2 单终端运行时
 
-`CommandHistoryTerminalDecorator` attaches one `CommandHistoryController` to each eligible terminal. The controller owns:
+`CommandHistoryTerminalDecorator` 为每个符合条件的终端附加一个 `CommandHistoryController`。控制器持有：
 
-- A `CommandInputMiddleware` inserted into the session middleware stack.
-- A `CommandBuffer` state machine containing text, cursor position, capture confidence, paste state, and dismissal state.
-- A `PredictionOverlay` mounted within the terminal component.
-- Subscriptions to session changes, alternate-screen changes, frontend destruction, and configuration changes.
+- 插入 session middleware 栈的 `CommandInputMiddleware`。
+- 包含文本、光标位置、捕获可信度、粘贴状态和关闭状态的 `CommandBuffer` 状态机。
+- 挂载在终端组件内的 `PredictionOverlay`。
+- 对 session 变更、alternate screen 变更、frontend 销毁及配置变更的订阅。
 
-On detach or session replacement, the controller removes its middleware, DOM, and subscriptions. It never leaves handlers attached to a destroyed terminal.
+执行 detach 或替换 session 时，控制器移除 middleware、DOM 和全部订阅，不在已销毁终端上遗留事件处理器。
 
-### 4.3 Runtime data flow
+### 4.3 运行时数据流
 
-1. Terminal input reaches `CommandInputMiddleware`.
-2. Recognized editing input updates `CommandBuffer` and is forwarded unchanged to the session.
-3. A confident, non-empty buffer triggers an in-memory query for the current connection key.
-4. `HistoryMatcher` partitions prefix and substring matches, ranks each partition, and returns a bounded result list.
-5. `PredictionOverlay` renders the configured A, B, or C presentation at the current xterm cursor position.
-6. Active navigation bindings update selection without forwarding their bytes. All other input is forwarded.
-7. Adoption sends the minimal edit sequence needed to make the shell line equal the selected command and updates `CommandBuffer` to the same value. It sends no Enter.
-8. On Enter, the controller finalizes a pending command, clears prediction state, and asynchronously asks the repository to persist it only after all safety gates pass.
+1. 终端输入到达 `CommandInputMiddleware`。
+2. 可识别的编辑输入更新 `CommandBuffer`，并原样转发给 session。
+3. 可信且非空的缓冲区触发针对当前 connection key 的内存查询。
+4. `HistoryMatcher` 将结果划分为前缀匹配和包含匹配，分别排序后返回有数量上限的结果。
+5. `PredictionOverlay` 在当前 xterm 光标位置渲染配置的 A、B 或 C 展示模式。
+6. 候选处于活动状态时，导航快捷键只更新选择而不转发对应字节；其他输入全部转发。
+7. 采纳操作发送最小编辑序列，使 Shell 当前行等于选中命令，同时将 `CommandBuffer` 更新为相同内容；不发送 Enter。
+8. 用户按 Enter 后，控制器生成一条待处理命令、清空预测状态，并仅在所有安全检查通过后异步请求仓储持久化。
 
-### 4.4 Extension seam for shell hooks
+### 4.4 Shell hook 扩展边界
 
-`CommandCaptureAdapter` defines lifecycle and final-command callbacks for future enhanced capture:
+`CommandCaptureAdapter` 为未来增强捕获定义生命周期和最终命令回调：
 
 ```ts
 export interface CommandCaptureAdapter {
@@ -88,172 +88,172 @@ export interface CommandCaptureHandle {
 }
 ```
 
-The generic input reconstructor remains the default. A future connection-level setting can select an installed adapter, but the first release does not install or inject shell scripts.
+通用输入重建器始终为默认实现。未来可通过 connection 级设置选择已安装的 adapter，但首个版本不安装或注入 Shell 脚本。
 
-## 5. Connection Identity and Isolation
+## 5. Connection 身份与隔离
 
-### 5.1 Saved profiles
+### 5.1 已保存 profile
 
-A saved or built-in profile uses this canonical identity input:
+已保存或内置 profile 使用以下规范身份输入：
 
 ```text
 profile:<profile.type>\0<profile.id>
 ```
 
-The profile name is metadata only. Renaming a saved profile does not move or merge its history.
+profile 名称仅作为元数据。重命名已保存 profile 不会移动或合并其历史。
 
-### 5.2 Temporary connections
+### 5.2 临时 connection
 
-When a Quick Connect or other transient profile has no stable ID, `ConnectionIdentityResolver` creates a canonical endpoint identity from non-secret connection options:
+Quick Connect 或其他临时 profile 没有稳定 ID 时，`ConnectionIdentityResolver` 根据不含敏感信息的 connection 选项生成规范端点身份：
 
-- SSH: normalized user, lowercase host, and effective port.
-- Serial: normalized port plus baud rate, data bits, stop bits, and parity.
-- Local: normalized executable path, arguments, and declared shell type.
-- Other terminal providers: profile type, stable name, and a recursively key-sorted option object after removing secret and volatile fields.
+- SSH：规范化用户名、小写主机名和实际端口。
+- Serial：规范化端口，以及波特率、数据位、停止位和奇偶校验。
+- Local：规范化可执行文件路径、参数和声明的 Shell 类型。
+- 其他终端 provider：profile 类型、稳定名称，以及移除敏感和易变字段后按键递归排序的选项对象。
 
-The generic sanitizer removes keys matching password, passphrase, token, secret, API key, private key material, environment values, current working directory, window size, process ID, PTY restore ID, and other session-only state. If no safe stable identity can be produced, the terminal receives a random tab-lifetime key and memory-only history.
+通用清理器移除匹配密码、口令、Token、Secret、API key、私钥材料、环境变量值、当前工作目录、窗口大小、进程 ID、PTY 恢复 ID 和其他仅属于 session 的字段。如果无法生成安全且稳定的身份，则为该终端分配随机的 tab 生命周期 key，并仅使用内存历史。
 
-### 5.3 Filesystem key
+### 5.3 文件系统 key
 
-The canonical identity is hashed with SHA-256. Only the lowercase hexadecimal digest becomes the history filename. Queries, appends, compaction, capacity enforcement, and clearing all require an explicit connection key, so a caller cannot accidentally query every file.
+使用 SHA-256 对规范身份进行哈希。历史文件名只使用小写十六进制摘要。查询、追加、压缩、容量控制和清空操作都必须显式提供 connection key，因此调用方无法意外查询全部文件。
 
-## 6. Persistence
+## 6. 持久化
 
-### 6.1 User data roots
+### 6.1 用户数据根目录
 
-The default root is platform-specific and may be overridden only by an advanced plugin setting that resolves to an absolute path under the current user's home directory:
+默认根目录按平台确定。只有高级插件设置可以覆盖该路径，且覆盖值必须解析为当前用户主目录下的绝对路径：
 
-- Windows: `%APPDATA%\tabby\cmd-history`
-- macOS: `~/Library/Application Support/tabby/cmd-history`
-- Linux: `${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history`
+- Windows：`%APPDATA%\tabby\cmd-history`
+- macOS：`~/Library/Application Support/tabby/cmd-history`
+- Linux：`${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history`
 
-Connection files live under `connections/<sha256>.jsonl`. The repository and Tabby installation directories are never used for history.
+connection 文件保存在 `connections/<sha256>.jsonl`。项目仓库和 Tabby 安装目录绝不用于保存历史。
 
-### 6.2 JSONL records
+### 6.2 JSONL 记录
 
-The append format is versioned:
+追加记录格式带版本号：
 
 ```json
 {"v":1,"kind":"use","command":"git status","at":"2026-08-12T12:00:00.000Z"}
 ```
 
-Compacted files contain one record per retained unique command:
+压缩后的文件为每条保留的唯一命令保存一条记录：
 
 ```json
 {"v":1,"kind":"entry","command":"git status","lastUsedAt":"2026-08-12T12:00:00.000Z","useCount":7}
 ```
 
-Loading replays both record kinds into the same aggregate. An invalid or truncated line is skipped and logged; valid surrounding records remain available.
+加载时将两种记录重放到同一个聚合结果中。无效或被截断的行会被跳过并记录日志，周围的有效记录仍可使用。
 
-### 6.3 Writes and compaction
+### 6.3 写入与压缩
 
-Each connection has an asynchronous serial append queue shared by all tabs in the plugin process. Terminal input never waits for this queue.
+每个 connection 都有一个异步串行追加队列，同一插件进程内使用该 connection 的所有 tab 共享此队列。终端输入不会等待该队列。
 
-Compaction runs when either:
+满足以下任一条件时执行压缩：
 
-- The event count exceeds twice the configured unique-command capacity; or
-- The file exceeds 2 MiB and at least 512 use events have accumulated since its last compacted entry set.
+- 事件数超过配置的唯一命令容量两倍；或
+- 文件超过 2 MiB，且自上次压缩记录集合之后又累积至少 512 条 use 事件。
 
-Compaction writes retained `entry` records to a sibling temporary file, flushes and closes it, and atomically replaces the original. A failed compaction preserves the original file. A startup pass removes only stale temporary files belonging to the same connection and never deletes a valid history file.
+压缩过程将保留的 `entry` 记录写入同目录临时文件，完成 flush 并关闭文件后，以原子替换方式更新原文件。压缩失败时保留原文件。启动检查只移除属于同一 connection 的过期临时文件，绝不删除有效历史文件。
 
-When persistence is unavailable, the repository warns once and keeps the current process's per-connection in-memory history. It never falls back to a shared store.
+持久化不可用时，仓储只警告一次，并保留当前进程内按 connection 隔离的内存历史，绝不退化为共享存储。
 
-### 6.4 Capacity and deduplication
+### 6.4 容量与去重
 
-The default capacity is 4096 unique commands per connection. Before identity comparison, commands receive these normalizations:
+每个 connection 默认保留 4096 条唯一命令。比较命令身份前执行以下规范化：
 
-- CRLF and CR become LF.
-- Leading and trailing whitespace is removed.
-- Internal whitespace, quoting, escaping, and case are preserved.
+- 将 CRLF 和 CR 转换为 LF。
+- 移除首尾空白。
+- 保留内部空白、引号、转义和大小写。
 
-Executing the same normalized command updates `lastUsedAt`, increments `useCount`, and keeps the most recently observed original text. When capacity is exceeded, entries with the oldest `lastUsedAt` are removed first.
+再次执行相同的规范化命令时，更新 `lastUsedAt`、增加 `useCount`，并保留最近一次观察到的原始文本。超过容量后，优先移除 `lastUsedAt` 最早的条目。
 
-## 7. Capture State Machine
+## 7. 捕获状态机
 
-### 7.1 Recognized edits
+### 7.1 可识别编辑
 
-The generic state machine supports printable Unicode text, bracketed paste, Backspace, Delete, Left, Right, Home, End, and common `Ctrl+A`, `Ctrl+E`, `Ctrl+U`, `Ctrl+K`, and `Ctrl+W` edits. Cursor indexes use Unicode grapheme boundaries so an edit does not split a visible character.
+通用状态机支持可打印 Unicode 文本、bracketed paste、Backspace、Delete、Left、Right、Home、End，以及常见的 `Ctrl+A`、`Ctrl+E`、`Ctrl+U`、`Ctrl+K` 和 `Ctrl+W` 编辑。光标索引使用 Unicode 字素边界，避免一次编辑拆分一个可见字符。
 
-Bracketed paste payload is treated as one edit operation. A pasted multiline block remains one history command when the user later submits it. Ordinary lines submitted separately become separate history commands.
+bracketed paste 内容作为一次编辑操作处理。粘贴的多行块在用户随后提交时仍作为一条历史命令；分别提交的普通行则保存为不同命令。
 
-### 7.2 Confidence loss
+### 7.2 可信度丢失
 
-The buffer becomes uncertain and predictions disappear after an unrecognized control sequence or an operation whose resulting shell buffer cannot be observed, including shell-native Tab completion. An uncertain buffer is not persisted. Enter or `Ctrl+C` resets the state to a new confident empty buffer.
+出现无法识别的控制序列，或执行结果无法由插件观察的操作（包括 Shell 原生 Tab 补全）后，缓冲区标记为不可信并隐藏预测。不可信缓冲区不得持久化。Enter 或 `Ctrl+C` 将状态重置为空且可信的新缓冲区。
 
-### 7.3 Enter and visible-echo safety
+### 7.3 Enter 与可见回显安全检查
 
-Enter creates a pending command only when the buffer is confident and non-empty. In default strict capture mode, the xterm logical line or logical multiline region immediately before submission must correspond to the reconstructed command. This prevents hidden password input and unrelated no-echo program input from being persisted.
+仅当缓冲区可信且非空时，Enter 才会产生待处理命令。在默认严格捕获模式下，提交前 xterm 的逻辑行或逻辑多行区域必须能与重建命令对应，从而避免持久化隐藏密码输入和无回显程序输入。
 
-Generic mode defines this event as an observed command-line submission, not proof that the shell started or completed a process. Shell continuation prompts are not reliably distinguishable across all local and remote shells. Exact final multiline commands require a future enhanced `CommandCaptureAdapter`; the generic mode keeps the best-effort Enter-delimited behavior explicit rather than guessing a shell grammar.
+通用模式将此事件定义为观察到的命令行提交，而不是 Shell 已启动或完成进程的证明。不同本地和远端 Shell 的续行提示无法可靠统一识别。精确的最终多行命令需要未来增强的 `CommandCaptureAdapter`；通用模式明确保留按 Enter 分隔的尽力捕获行为，不猜测 Shell 语法。
 
-Advanced settings may enable permissive capture globally. The setting displays a warning that every confidently reconstructed Enter-delimited line can then be recorded, including input outside a shell prompt. Sensitive filtering still runs unless separately disabled.
+高级设置可以全局启用宽松捕获。该设置必须提示：所有成功重建并以 Enter 分隔的输入都可能被记录，其中也包括 Shell 提示符之外的输入。除非另行关闭，敏感过滤仍会执行。
 
-### 7.4 Control-C
+### 7.4 Ctrl+C
 
-`Ctrl+C` is always forwarded to the terminal. It also immediately clears the internal command buffer, candidates, selection, dismissal state, paste state, and any pending persistence request. The plugin does not replace or delay the terminal's interrupt behavior.
+`Ctrl+C` 始终转发给终端，同时立即清空内部命令缓冲区、候选、选择、关闭状态、粘贴状态以及待持久化请求。插件不替换或延迟终端原有的中断行为。
 
 ### 7.5 Alternate screen
 
-While the terminal is in alternate-screen mode, capture and predictions are disabled, runtime state is cleared, and every input byte is passed through. Returning to the normal screen starts with an empty confident buffer.
+终端处于 alternate-screen 模式期间，捕获和预测均禁用，运行时状态被清空，所有输入字节直接透传。返回 normal screen 后，从空且可信的缓冲区重新开始。
 
-## 8. Matching and Ranking
+## 8. 匹配与排序
 
-Predictions begin after one input character by default. Empty or whitespace-only buffers return no candidates.
+默认输入 1 个字符后开始预测。空缓冲区或仅包含空白的缓冲区不返回候选。
 
-Matching is case-insensitive by default and configurable. Results are partitioned into:
+默认匹配不区分大小写，并允许配置。结果分为：
 
-1. Commands beginning with the query.
-2. Commands containing the query elsewhere.
+1. 以查询文本开头的命令。
+2. 在其他位置包含查询文本的命令。
 
-Every prefix result sorts ahead of every substring result. Within a partition, normalized component scores are combined:
+所有前缀匹配始终排在所有包含匹配之前。同一分组内组合规范化后的各项得分：
 
 ```text
 score = 0.55 * recency + 0.30 * frequency + 0.15 * matchCloseness
 ```
 
-- Recency decays with elapsed time from `lastUsedAt`.
-- Frequency uses logarithmic scaling so repeated commands do not permanently dominate.
-- Match closeness rewards an earlier match and less unmatched text.
+- recency 根据 `lastUsedAt` 距当前时间的间隔衰减。
+- frequency 使用对数缩放，避免重复命令永久占据最高优先级。
+- matchCloseness 奖励更靠前的匹配位置和更少的未匹配文本。
 
-Ties resolve deterministically by newer `lastUsedAt`, higher `useCount`, and finally command text. The three weights are advanced settings and must sum to 1. The settings UI normalizes edited values before saving.
+得分相同时，依次按更新的 `lastUsedAt`、更高的 `useCount` 和命令文本确定稳定顺序。三个权重属于高级设置且总和必须为 1，设置 UI 在保存前对用户输入值执行归一化。
 
-## 9. Prediction UI and Adoption
+## 9. 预测 UI 与采纳
 
-### 9.1 Presentation modes
+### 9.1 展示模式
 
-All modes are included. Mode B is the default.
+三种模式全部提供，默认使用 B。
 
-- Mode A, inline: show only the selected command's remaining text as a ghost prediction. Up and Down cycle through candidates one at a time.
-- Mode B, list: show up to five candidates in a cursor-anchored list whenever matches exist. The active row is highlighted.
-- Mode C, hybrid: show the top inline prediction and keep the list collapsed. Down opens the list; Escape collapses or dismisses it.
+- A（inline）：只以 ghost text 显示当前选中命令剩余的文本；Up 和 Down 每次切换一条候选。
+- B（list）：存在匹配时，在光标附近的列表中显示最多 5 条候选，并高亮当前项。
+- C（hybrid）：显示首条 inline 预测，默认收起列表；按 Down 展开列表，按 Escape 收起或关闭。
 
-The default maximum is five visible candidates for B and C and is configurable. Overlay positioning uses xterm's buffer cursor coordinates and screen bounds through a small `TerminalGeometryAdapter`. Rendering-version workarounds are isolated inside that adapter.
+B 和 C 默认最多显示 5 条候选，并允许配置。overlay 通过独立的 `TerminalGeometryAdapter` 使用 xterm 缓冲区光标坐标和屏幕边界定位，渲染版本兼容处理只存在于该 adapter 内。
 
-The overlay repositions after input, terminal resize, font zoom, scroll, and selection change. It flips above the cursor when insufficient space exists below and clips within the terminal viewport.
+输入、终端缩放、字体缩放、滚动和选择变化后，overlay 都会重新定位。光标下方空间不足时改为显示在上方，并始终限制在终端 viewport 内。
 
-### 9.2 Default key behavior
+### 9.2 默认按键行为
 
-- Up and Down select candidates only while candidates are active; otherwise their bytes pass to the shell.
-- Right adopts the active candidate only while a candidate is active; otherwise it passes to the shell.
-- Escape closes predictions for the current buffer. A subsequent text edit allows them to appear again.
-- Tab always passes to the shell and marks the generic reconstructed buffer uncertain.
-- `Ctrl+C` always passes through and clears plugin state.
+- 只有候选处于活动状态时，Up 和 Down 才切换候选；否则将对应字节转发给 Shell。
+- 只有候选处于活动状态时，Right 才采纳当前候选；否则转发给 Shell。
+- Escape 关闭当前缓冲区的预测；再次编辑文本后允许重新显示。
+- Tab 始终转发给 Shell，并将通用重建缓冲区标记为不可信。
+- `Ctrl+C` 始终透传并清空插件状态。
 
-Navigation and adoption bindings are configurable. Configuration rejects bindings that collide with `Ctrl+C` or ordinary printable input.
+导航和采纳快捷键允许配置。配置必须拒绝与 `Ctrl+C` 或普通可打印输入冲突的按键。
 
-### 9.3 Safe adoption
+### 9.3 安全采纳
 
-For a single-line prefix prediction when the cursor is at the end, adoption sends only the unmatched suffix. Otherwise it moves from the known cursor to the end, removes the known buffer by grapheme, and inserts the complete selected command. The middleware emits these bytes downstream without recursively treating them as user input, then sets its own buffer to the adopted command.
+对于光标位于末尾的单行前缀预测，采纳时只发送尚未匹配的后缀。其他情况下，先从已知光标位置移动到末尾，再按字素删除已知缓冲区并插入完整候选命令。middleware 直接向下游发送这些字节，不将其再次当作用户输入处理，随后将自身缓冲区设置为已采纳命令。
 
-A multiline command is offered only when the terminal reports bracketed-paste support. Adoption wraps the text in bracketed-paste markers so embedded newlines edit the command buffer rather than execute it. Without bracketed-paste support, multiline entries remain stored but are excluded from predictions.
+只有终端报告支持 bracketed paste 时，才提供多行命令候选。采纳时使用 bracketed-paste 标记包裹文本，使其中的换行只编辑命令缓冲区而不执行命令。不支持 bracketed paste 时，多行条目仍保留在历史中，但不参与预测。
 
-No adoption path sends Enter, carriage return, newline outside bracketed-paste framing, or a shell command delimiter.
+任何采纳路径都不得发送 Enter、回车、bracketed-paste 框架之外的换行或 Shell 命令分隔符。
 
-## 10. Sensitive History Policy
+## 10. 敏感历史策略
 
-Sensitive filtering runs before an event can enter a disk queue. It is enabled by default.
+敏感过滤在事件进入磁盘队列之前执行，默认启用。
 
-The initial case-insensitive indicators are:
+初始内置指示词不区分大小写：
 
 - `password`
 - `asplaintext`
@@ -261,106 +261,106 @@ The initial case-insensitive indicators are:
 - `apikey`
 - `secret`
 
-Users can add exclusion regular expressions. Invalid expressions are rejected inline and the last valid saved configuration remains active. The entire command is discarded on a match; the plugin never writes a redacted form that could retain fragments of a credential.
+用户可以添加排除正则表达式。无效表达式必须在 UI 中被拒绝，并继续使用最近一次有效的已保存配置。命中规则时丢弃完整命令；插件不得写入可能保留凭据片段的脱敏版本。
 
-Users may explicitly disable sensitive filtering. Strict visible-echo capture remains independently enabled unless they also change capture mode.
+用户可以显式关闭敏感过滤。除非用户另行修改捕获模式，否则严格可见回显捕获仍独立保持启用。
 
-## 11. Settings
+## 11. 设置
 
-The Tabby settings page contains:
+Tabby 设置页包含：
 
-- Plugin enabled.
-- Presentation mode A, B, or C; default B.
-- Maximum visible candidates; default 5.
-- Minimum query length; default 1.
-- Case-sensitive matching; default off.
-- Unique history capacity per connection; default 4096.
-- Recency, frequency, and match-closeness weights; defaults 55, 30, and 15.
-- Strict or permissive capture; default strict.
-- Sensitive filtering enabled; default on.
-- User exclusion regular expressions.
-- Candidate navigation, adoption, and dismissal bindings.
-- Clear active connection history.
+- 插件启用开关。
+- A、B 或 C 展示模式，默认 B。
+- 最大可见候选数，默认 5。
+- 最短查询长度，默认 1。
+- 是否区分大小写，默认关闭。
+- 每个 connection 的唯一历史容量，默认 4096。
+- recency、frequency 和 matchCloseness 权重，默认分别为 55、30 和 15。
+- 严格或宽松捕获，默认严格。
+- 敏感过滤启用开关，默认开启。
+- 用户排除正则表达式。
+- 候选导航、采纳和关闭快捷键。
+- 清空当前 connection 历史。
 
-The clear action is disabled without an active eligible terminal. Otherwise it names the active connection, requires confirmation, clears only its memory index and hashed file, and refreshes predictions in every open tab using the same key.
+没有活动且符合条件的终端时，清空操作禁用。否则显示当前 connection 名称、要求二次确认、只清除其内存索引和哈希文件，并刷新使用相同 key 的所有已打开 tab 的预测。
 
-Settings live in Tabby's configuration. Command history never lives in Tabby's configuration document.
+设置保存在 Tabby 配置中；命令历史绝不保存在 Tabby 配置文档中。
 
-## 12. Failure Handling
+## 12. 故障处理
 
-- Middleware and controller exceptions log diagnostic context without raw command text and pass the original input through.
-- Matcher failures hide predictions for that input and do not change the command buffer.
-- Overlay failures remove the overlay and leave capture and terminal input functional.
-- Repository read or write failures warn once per failure episode and use connection-local memory only.
-- Invalid JSONL records are skipped without rewriting the source merely because it contains an error.
-- A missing or unsupported frontend disables visual predictions for that terminal and passes all input through.
-- An unresolved connection identity uses tab-lifetime memory and cannot access another connection's repository.
-- Plugin detach closes queues after pending appends, cancels subscriptions, removes middleware, and removes overlay nodes.
+- middleware 和 controller 异常只记录不含原始命令文本的诊断上下文，并透传原始输入。
+- matcher 失败时隐藏本次输入对应的预测，不修改命令缓冲区。
+- overlay 失败时移除 overlay，捕获和终端输入仍可正常工作。
+- 仓储读写失败时，每个故障阶段只警告一次，并仅使用当前 connection 的内存历史。
+- 无效 JSONL 记录会被跳过，不因源文件包含错误就自动重写它。
+- frontend 缺失或不受支持时，对该终端禁用视觉预测并透传所有输入。
+- connection 身份无法解析时，只使用 tab 生命周期内存，不得访问其他 connection 的仓储。
+- 插件 detach 时等待待追加任务完成后关闭队列、取消订阅、移除 middleware 和 overlay 节点。
 
-## 13. Performance Requirements
+## 13. 性能要求
 
-- Querying and ranking 4096 unique commands must complete within 10 ms at the 95th percentile in the automated benchmark environment.
-- No filesystem operation occurs synchronously on the input path.
-- One history file is loaded at most once per plugin process and connection key, then shared by tabs using that key.
-- Rendering updates are coalesced to one animation frame.
-- Compaction runs asynchronously and never holds terminal input or matching locks.
+- 在自动化基准环境中，查询并排序 4096 条唯一命令的第 95 百分位耗时必须不超过 10 ms。
+- 输入链路上不得同步执行文件系统操作。
+- 每个插件进程和 connection key 最多加载一次历史文件，随后由使用该 key 的 tab 共享。
+- 渲染更新合并到每个 animation frame 最多一次。
+- 压缩异步执行，不持有终端输入锁或匹配锁。
 
-## 14. Testing Strategy
+## 14. 测试策略
 
-### 14.1 Unit tests
+### 14.1 单元测试
 
-- `CommandBuffer`: printable input, Unicode graphemes, paste, cursor edits, deletion, control edits, unknown sequences, Enter, `Ctrl+C`, confidence, and alternate screen.
-- `ConnectionIdentityResolver`: saved profiles, SSH Quick Connect, serial, local, sanitizer coverage, stable hashing, and unsafe fallback.
-- `SensitiveCommandFilter`: built-in indicators, custom expressions, disabled mode, and invalid-expression handling.
-- `HistoryMatcher`: prefix partition, substring partition, case rules, recency, logarithmic frequency, closeness, deterministic ties, and result limits.
-- `JsonlHistoryRepository`: append, replay, aggregate, capacity, isolation, corrupt lines, failed writes, memory fallback, and atomic compaction.
-- Presentation reducers for A, B, C and their selection behavior.
+- `CommandBuffer`：可打印输入、Unicode 字素、粘贴、光标编辑、删除、控制键编辑、未知序列、Enter、`Ctrl+C`、可信度和 alternate screen。
+- `ConnectionIdentityResolver`：已保存 profile、SSH Quick Connect、Serial、Local、清理器覆盖、稳定哈希及不安全身份回退。
+- `SensitiveCommandFilter`：内置指示词、自定义表达式、禁用模式和无效表达式处理。
+- `HistoryMatcher`：前缀分组、包含分组、大小写规则、时效性、对数频次、匹配紧密度、稳定同分排序和结果上限。
+- `JsonlHistoryRepository`：追加、重放、聚合、容量、隔离、损坏行、写入失败、内存回退和原子压缩。
+- A、B、C 展示模式 reducer 及其选择行为。
 
-### 14.2 Integration and component tests
+### 14.2 集成测试与组件测试
 
-- A fake Tabby terminal and session verify middleware attachment, detachment, input forwarding, active-key suppression, adoption without Enter, session replacement, and same-key tab sharing.
-- xterm-compatible buffer fixtures verify visible-echo safety and geometry calculations.
-- Angular component tests verify defaults, validation, confirmation, active-connection clearing, and live configuration updates.
-- Temporary real directories verify that two connection keys never read, modify, compact, or clear each other's files.
+- 使用假 Tabby 终端和 session 验证 middleware attach/detach、输入转发、活动快捷键拦截、无 Enter 采纳、session 替换及相同 key 的 tab 共享。
+- 使用 xterm 兼容缓冲区 fixture 验证可见回显安全检查和几何位置计算。
+- 使用 Angular 组件测试验证默认配置、校验、确认操作、清空当前 connection 及实时配置更新。
+- 使用真实临时目录验证两个 connection key 绝不读取、修改、压缩或清空对方文件。
 
-### 14.3 Build and package tests
+### 14.3 构建与打包测试
 
-- TypeScript typecheck.
-- Lint.
-- Complete automated test suite.
-- Production Webpack build.
-- npm package inspection confirming the `tabby-plugin` keyword, compiled `dist`, declarations, README, and license, with no source history or test fixtures shipped accidentally.
+- TypeScript 类型检查。
+- Lint。
+- 完整自动化测试套件。
+- Webpack 生产构建。
+- 检查 npm 包，确认包含 `tabby-plugin` keyword、编译后的 `dist`、类型声明、README 和 license，且不意外发布源历史数据或测试 fixture。
 
-### 14.4 Manual Tabby acceptance matrix
+### 14.4 Tabby 手工验收矩阵
 
-Test the packaged plugin in the current stable Tabby desktop release with:
+在当前稳定版 Tabby 桌面端中使用打包插件测试：
 
-- PowerShell and `cmd.exe` on Windows.
-- WSL Bash.
-- Local Bash or Zsh on macOS/Linux when available.
-- Saved SSH and SSH Quick Connect.
-- Split panes and multiple tabs sharing one connection.
-- Two different connections with identical command text.
-- Password/no-echo prompts.
-- Vim, less, top, or another alternate-screen application.
-- Bracketed multiline paste.
-- All three presentation modes and configuration changes without restart.
-- `Ctrl+C` during an edited line and while a process is running.
-- Storage unavailable and a history file containing a truncated final line.
+- Windows PowerShell 和 `cmd.exe`。
+- WSL Bash。
+- 条件允许时测试 macOS/Linux 本地 Bash 或 Zsh。
+- 已保存 SSH 和 SSH Quick Connect。
+- 分屏和使用同一 connection 的多个 tab。
+- 包含相同命令文本的两个不同 connection。
+- 密码/无回显提示。
+- Vim、less、top 或其他 alternate-screen 应用。
+- bracketed 多行粘贴。
+- 三种展示模式，以及无需重启即可生效的配置变更。
+- 编辑命令期间和进程运行期间的 `Ctrl+C`。
+- 存储不可用，以及历史文件最后一行被截断的场景。
 
-## 15. Acceptance Criteria
+## 15. 验收标准
 
-The release is complete when:
+满足以下条件时，版本才算完成：
 
-1. Commands from one connection never appear in another connection's predictions.
-2. History survives a Tabby restart in the documented per-user data directory.
-3. Typing produces prefix-first, ranked predictions in default mode B.
-4. Modes A, B, and C can be selected in settings and update active terminals.
-5. Up and Down navigate, Right adopts without execution, Escape dismisses, and Tab remains a shell input.
-6. `Ctrl+C` retains its interrupt behavior and clears all plugin command state.
-7. Strict capture does not persist tested no-echo password input or alternate-screen input.
-8. Sensitive matches do not reach the filesystem while filtering is enabled.
-9. Clearing history affects only the active connection after confirmation.
-10. A storage, parser, matcher, or overlay failure does not make terminal input unusable.
-11. Automated tests, lint, typecheck, production build, and package inspection pass.
-12. The real-Tabby acceptance matrix has no unresolved release-blocking failures.
+1. 一个 connection 的命令绝不出现在另一个 connection 的预测中。
+2. 重启 Tabby 后，历史仍保存在文档约定的用户数据目录中。
+3. 输入文本后，默认 B 模式生成前缀优先且经过综合排序的预测。
+4. 可以在设置中选择 A、B 和 C 模式，并实时更新活动终端。
+5. Up 和 Down 导航候选，Right 只采纳不执行，Escape 关闭候选，Tab 仍作为 Shell 输入。
+6. `Ctrl+C` 保留原有中断行为，并清空插件全部命令状态。
+7. 严格捕获不会保存验收中测试的无回显密码输入或 alternate-screen 输入。
+8. 启用敏感过滤时，命中规则的内容不会到达文件系统。
+9. 经确认清空历史时，只影响当前 connection。
+10. 存储、解析器、matcher 或 overlay 故障不会导致终端无法输入。
+11. 自动化测试、Lint、类型检查、生产构建和包检查全部通过。
+12. 真实 Tabby 验收矩阵中不存在未解决的发布阻断问题。
