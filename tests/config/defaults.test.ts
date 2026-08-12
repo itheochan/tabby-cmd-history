@@ -20,4 +20,33 @@ describe('command history defaults', () => {
             bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, accept: 'Ctrl+C' as never },
         })).toThrow('Ctrl+C')
     })
+
+    test.each([
+        ['maxVisible', { maxVisible: 1 }],
+        ['maxVisible', { maxVisible: 20 }],
+        ['minQueryLength', { minQueryLength: 1 }],
+        ['minQueryLength', { minQueryLength: 20 }],
+        ['capacity', { capacity: 1 }],
+        ['capacity', { capacity: 100000 }],
+    ])('accepts the %s boundary', (_name, override) => {
+        expect(() => validateHistoryConfig({ ...DEFAULT_COMMAND_HISTORY_CONFIG, ...override })).not.toThrow()
+    })
+
+    test.each([
+        ['maxVisible', 0],
+        ['maxVisible', 21],
+        ['minQueryLength', 0],
+        ['minQueryLength', 21],
+        ['capacity', 0],
+        ['capacity', 100001],
+    ])('rejects %s outside its allowed range', (name, value) => {
+        expect(() => validateHistoryConfig({ ...DEFAULT_COMMAND_HISTORY_CONFIG, [name]: value })).toThrow(name)
+    })
+
+    test('rejects printable bindings', () => {
+        expect(() => validateHistoryConfig({
+            ...DEFAULT_COMMAND_HISTORY_CONFIG,
+            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, accept: 'a' as never },
+        })).toThrow('Printable character')
+    })
 })
