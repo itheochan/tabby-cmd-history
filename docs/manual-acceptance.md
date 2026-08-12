@@ -5,8 +5,8 @@
 | 项目 | 值 |
 |---|---|
 | 日期 | 2026-08-13（Asia/Singapore） |
-| 官方当前稳定版 | Tabby v1.0.234（GitHub Releases） |
-| 本机实际载入版 | Tabby 1.0.235（本次隔离 debug 日志中的 core version） |
+| 官方当前稳定版 | Tabby v1.0.235（GitHub Releases，2026-07-22 发布） |
+| 本机实际载入版 | Tabby 1.0.235（本次隔离 debug 日志中的 core version；与官方版本号相同但证据来源独立） |
 | 操作系统 | Microsoft Windows 10.0.26200，x64 |
 | Node.js | v22.14.0 |
 | 验收对象 | 功能基线 commit `36cd3810d2042aad7cb4e24b95cbfa8ea670fef1` + 本文档所在 Task 12 发布差异 |
@@ -29,7 +29,7 @@
 | Angular module / DI 初始化 | PASS | 插件加载后继续运行 20 秒，日志中未出现 `Could not load cmd-history`、`NullInjectorError`、Angular `NG0...` 或未捕获异常。 |
 | 用户状态保护 | PASS | 启动前已有的 Tabby PID 为 `7364, 24532, 26340, 27740, 41564`；只停止本次启动 PID `56500`，停止后没有本次新增残留进程。未读取或修改用户配置，未向任何终端输入。 |
 
-首次隔离启动曾真实暴露 `Cannot load package info for tabby-cmd-history`。依据 Tabby 的公开 loader 源码定位为 `package.json` 缺少 `author`，补齐后用全新隔离目录复跑得到以上 PASS。原始 debug 日志可能包含本机路径，只保留在被 Git 忽略的任务临时目录中，不提交仓库。
+首次隔离启动曾真实暴露 `Cannot load package info for tabby-cmd-history`。依据 Tabby 的公开 loader 源码定位为 `package.json` 缺少 `author`，补齐后用全新隔离目录复跑得到以上 PASS。debug 日志在运行时仅写入本次 task temp；核验后相关目录已清理，原始日志未跟踪、未提交。
 
 日志中另有 Chromium DevTools 的 `Autofill.enable` / `Autofill.setAddresses` 协议方法不存在消息；它们没有引用本插件、Angular 或 DI，作为环境噪声记录，不计为插件功能 PASS 或 FAIL。
 

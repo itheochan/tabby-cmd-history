@@ -167,8 +167,7 @@
     "webpack-cli": "^5.1.4"
   },
   "engines": { "node": ">=20" },
-  "license": "MIT",
-  "repository": "https://github.com/itheochan/cmd-history"
+  "license": "MIT"
 }
 ```
 

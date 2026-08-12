@@ -7,7 +7,7 @@
 ## 功能
 
 - 记录用户在终端中提交过、且通过捕获安全检查的命令。
-- 用户输入时只查询内存索引，按当前完整 buffer 做前缀优先、包含匹配的排序预测。
+- 首次访问 persistent key 时，插件异步把该 connection 的隔离 JSONL 加载到进程内共享索引；后续匹配和排序面向该内存索引。收到仓储 mutation 通知时会异步刷新对应 key 的内存快照。
 - Up/Down 选择候选，Right 只把候选填入当前命令行，绝不附加 Enter 或自动执行。
 - 每个 connection 独立存储和查询；相同 connection key 的多个 tab 共享历史，不同 key 之间不会互相推荐。
 - 历史以 JSONL 保存在本机当前用户的数据目录，不写入项目目录、Tabby 安装目录或 Tabby 配置文件。
@@ -153,7 +153,7 @@ npm run verify
 
 `npm run verify` 依次执行 ESLint、插件与测试 TypeScript 类型检查、Jest、production webpack build 和真实 `npm pack --dry-run --json` allowlist 检查。发布包只允许 `dist/**`、`README.md`、`LICENSE` 和 `package.json`。
 
-2026-08-13 的自动化基线为 18 个 suite、281 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收；真实环境状态和复验步骤见源码仓库中的 [`docs/manual-acceptance.md`](https://github.com/itheochan/cmd-history/blob/master/docs/manual-acceptance.md)。
+2026-08-13 的自动化基线为 18 个 suite、281 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收。发布包不包含 `docs/`；请从源码 checkout 查看 `docs/manual-acceptance.md` 中的真实环境状态和复验步骤。
 
 ## 界面截图
 
