@@ -1,7 +1,8 @@
 {
   "name": "tabby-cmd-history",
   "version": "0.1.0",
-  "description": "Per-connection command history predictions for Tabby",
+  "description": "Per-connection command history capture and predictions for Tabby desktop",
+  "author": "itheochan",
   "keywords": ["tabby-plugin", "terminal", "history"],
   "main": "dist/index.js",
   "typings": "dist/index.d.ts",
@@ -10,9 +11,11 @@
     "test": "jest --runInBand",
     "test:watch": "jest --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck:test": "tsc -p tsconfig.test.json --noEmit",
     "lint": "eslint src tests --ext .ts",
     "build": "webpack --mode production",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run build",
+    "pack:check": "node scripts/check-package.mjs",
+    "verify": "npm run lint && npm run typecheck && npm run typecheck:test && npm test && npm run build && npm run pack:check",
     "prepublishOnly": "npm run verify"
   },
   "peerDependencies": {
@@ -21,9 +24,9 @@
     "@angular/forms": "^15.2.0",
     "@ng-bootstrap/ng-bootstrap": "^14.1.0",
     "rxjs": "^7.5.0",
-    "tabby-core": "1.0.231-nightly.0",
-    "tabby-settings": "1.0.231-nightly.0",
-    "tabby-terminal": "1.0.231-nightly.0"
+    "tabby-core": ">=1.0.231-nightly.0 <2",
+    "tabby-settings": ">=1.0.231-nightly.0 <2",
+    "tabby-terminal": ">=1.0.231-nightly.0 <2"
   },
   "devDependencies": {
     "@angular/common": "^15.2.6",
