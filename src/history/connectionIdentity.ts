@@ -73,7 +73,7 @@ function resolveSshCanonical (options: Record<string, unknown>): string | undefi
 }
 
 function resolveSerialCanonical (options: Record<string, unknown>): string | undefined {
-    const device = normalizeText(options.device).toLowerCase()
+    const device = normalizeText(options.device)
     const baud = normalizeBaud(options.baud)
     if (!device || !baud) {
         return undefined
@@ -82,13 +82,13 @@ function resolveSerialCanonical (options: Record<string, unknown>): string | und
 }
 
 function resolveLocalCanonical (options: Record<string, unknown>): string | undefined {
-    const shell = normalizeText(options.shell).toLowerCase()
+    const shell = normalizeText(options.shell)
     if (!shell) {
         return undefined
     }
     return JSON.stringify({
         path: normalizeText(options.path),
-        provider: normalizeText(options.provider).toLowerCase(),
+        provider: normalizeText(options.provider),
         shell,
         type: 'local',
     })
@@ -115,8 +115,18 @@ function normalizePort (value: unknown): string | undefined {
 }
 
 function normalizeBaud (value: unknown): string | undefined {
-    const baud = Number(value)
-    return Number.isInteger(baud) && baud > 0 ? String(baud) : undefined
+    if (typeof value === 'number') {
+        return Number.isFinite(value) && value > 0 ? String(value) : undefined
+    }
+    if (typeof value !== 'string') {
+        return undefined
+    }
+    const text = value.trim()
+    if (!/^\d+$/u.test(text)) {
+        return undefined
+    }
+    const baud = Number(text)
+    return Number.isFinite(baud) && baud > 0 ? String(baud) : undefined
 }
 
 function sanitizeOptions (value: unknown, ancestors = new WeakSet<object>()): SafeValue | undefined {

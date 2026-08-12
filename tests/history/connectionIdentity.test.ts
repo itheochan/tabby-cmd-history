@@ -34,12 +34,37 @@ test('serial quick connect persists normalized device and baud identities', () =
     expect(resolver.resolve({ type: 'serial', options: { baud: 9600 } }, 'missing-device').persistent).toBe(false)
 })
 
+test('serial quick connect preserves device casing for isolation', () => {
+    const upper = resolver.resolve({ type: 'serial', options: { device: ' /dev/ttyUSB0 ', baud: 9600 } }, 'upper')
+    const lower = resolver.resolve({ type: 'serial', options: { device: '/dev/ttyusb0', baud: 9600 } }, 'lower')
+    expect(upper.persistent).toBe(true)
+    expect(lower.persistent).toBe(true)
+    expect(upper.key).not.toBe(lower.key)
+})
+
+test.each([true, [9600], {}, '', Number.POSITIVE_INFINITY, 0, -1])(
+    'serial quick connect rejects unsafe baud value %p',
+    baud => expect(resolver.resolve({ type: 'serial', options: { device: '/dev/ttyUSB0', baud } }, 'invalid-baud')).toEqual({
+        key: 'memory:invalid-baud', persistent: false, label: 'Temporary terminal',
+    }),
+)
+
 test('local quick connect persists shell, path, and provider identities', () => {
     const localA = resolver.resolve({ type: 'local', options: { shell: 'bash', path: '/bin/bash', provider: 'builtin' } }, 'a')
     const localB = resolver.resolve({ type: 'LOCAL', options: { shell: 'bash', path: '/bin/bash', provider: 'custom' } }, 'b')
     expect(localA.persistent).toBe(true)
     expect(localA.key).not.toBe(localB.key)
     expect(resolver.resolve({ type: 'local', options: { path: '/bin/bash', provider: 'builtin' } }, 'missing-shell').persistent).toBe(false)
+})
+
+test('local quick connect preserves endpoint identifier casing for isolation', () => {
+    const base = resolver.resolve({ type: 'local', options: { shell: 'Bash', path: '/Bin/Shell', provider: 'Builtin' } }, 'base')
+    const shellCase = resolver.resolve({ type: 'local', options: { shell: 'bash', path: '/Bin/Shell', provider: 'Builtin' } }, 'shell')
+    const pathCase = resolver.resolve({ type: 'local', options: { shell: 'Bash', path: '/bin/Shell', provider: 'Builtin' } }, 'path')
+    const providerCase = resolver.resolve({ type: 'local', options: { shell: 'Bash', path: '/Bin/Shell', provider: 'builtin' } }, 'provider')
+    expect(base.key).not.toBe(shellCase.key)
+    expect(base.key).not.toBe(pathCase.key)
+    expect(base.key).not.toBe(providerCase.key)
 })
 
 test('ssh quick connect separates explicit ports for the same user and host', () => {
