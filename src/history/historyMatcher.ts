@@ -19,9 +19,9 @@ export class HistoryMatcher {
             return []
         }
 
-        const normalizedQuery = this.normalize(query, config.caseSensitive)
+        const findMatchIndex = createMatchIndexFinder(query, config.caseSensitive)
         const matches = entries.flatMap((entry, sourceIndex) => {
-            const matchIndex = this.normalize(entry.command, config.caseSensitive).indexOf(normalizedQuery)
+            const matchIndex = findMatchIndex(entry.command)
             if (matchIndex < 0) {
                 return []
             }
@@ -30,15 +30,11 @@ export class HistoryMatcher {
         })
         const maxUseCount = matches.reduce((maximum, match) => Math.max(maximum, safeUseCount(match.entry.useCount)), 0)
         const nowTimestamp = safeTimestamp(now)
-        const predictions = matches.map(match => this.score(match.entry, match.matchIndex, match.sourceIndex, normalizedQuery.length, maxUseCount, config, nowTimestamp))
+        const predictions = matches.map(match => this.score(match.entry, match.matchIndex, match.sourceIndex, query.length, maxUseCount, config, nowTimestamp))
         const prefix = predictions.filter(prediction => prediction.matchKind === 'prefix').sort(comparePredictions)
         const contains = predictions.filter(prediction => prediction.matchKind === 'contains').sort(comparePredictions)
 
         return [...prefix, ...contains].slice(0, limit).map(toPrediction)
-    }
-
-    private normalize (value: string, caseSensitive: boolean): string {
-        return caseSensitive ? value : value.toLocaleLowerCase()
     }
 
     private score (
@@ -92,6 +88,19 @@ function toPrediction (prediction: ScoredPrediction): Prediction {
         score: prediction.score,
         matchIndex: prediction.matchIndex,
     }
+}
+
+function createMatchIndexFinder (query: string, caseSensitive: boolean): (command: string) => number {
+    if (caseSensitive) {
+        return command => command.indexOf(query)
+    }
+
+    const literalQuery = new RegExp(escapeRegExp(query), 'iu')
+    return command => literalQuery.exec(command)?.index ?? -1
+}
+
+function escapeRegExp (value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
 }
 
 function safeTimestamp (value: Date | string): number {

@@ -51,3 +51,39 @@ test('returns no predictions below minimum length and orders invalid timestamps 
     expect(matcher.query(source, 'git', config, new Date('2026-08-12T12:00:00Z')).map(x => x.command))
         .toEqual(['git valid', 'git invalid'])
 })
+
+test('reports the original UTF-16 match index for case-insensitive Unicode matching', () => {
+    const result = new HistoryMatcher().query(
+        [{ command: 'Xİgit status', lastUsedAt: '2026-08-12T00:00:00Z', useCount: 1 }],
+        'git',
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+
+    expect(result).toMatchObject([{ command: 'Xİgit status', matchIndex: 2, matchKind: 'contains' }])
+})
+
+test('treats regex metacharacters as literal text', () => {
+    const result = new HistoryMatcher().query(
+        [
+            { command: 'echo [a]', lastUsedAt: '2026-08-12T00:00:00Z', useCount: 1 },
+            { command: 'echo a', lastUsedAt: '2026-08-12T00:00:00Z', useCount: 1 },
+        ],
+        '[a]',
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+
+    expect(result.map(prediction => prediction.command)).toEqual(['echo [a]'])
+})
+
+test('uses ECMAScript Unicode case-insensitive semantics', () => {
+    const result = new HistoryMatcher().query(
+        [{ command: 'Kelvin list', lastUsedAt: '2026-08-12T00:00:00Z', useCount: 1 }],
+        'kelvin',
+        defaults,
+        new Date('2026-08-12T12:00:00Z'),
+    )
+
+    expect(result).toMatchObject([{ matchIndex: 0, matchKind: 'prefix' }])
+})
