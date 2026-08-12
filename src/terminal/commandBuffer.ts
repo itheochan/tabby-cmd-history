@@ -36,12 +36,9 @@ export class CommandBuffer {
 
         switch (action.type) {
             case 'insert':
-            case 'paste': {
-                const inserted = segment(action.text)
-                this.graphemes.splice(this.cursor, 0, ...inserted)
-                this.cursor += inserted.length
+            case 'paste':
+                this.replace(this.cursor, this.cursor, action.text)
                 return {}
-            }
             case 'left':
                 this.cursor = Math.max(0, this.cursor - 1)
                 return {}
@@ -56,20 +53,19 @@ export class CommandBuffer {
                 return {}
             case 'backspace':
                 if (this.cursor > 0) {
-                    this.graphemes.splice(--this.cursor, 1)
+                    this.replace(this.cursor - 1, this.cursor, '')
                 }
                 return {}
             case 'delete':
                 if (this.cursor < this.graphemes.length) {
-                    this.graphemes.splice(this.cursor, 1)
+                    this.replace(this.cursor, this.cursor + 1, '')
                 }
                 return {}
             case 'deleteStart':
-                this.graphemes.splice(0, this.cursor)
-                this.cursor = 0
+                this.replace(0, this.cursor, '')
                 return {}
             case 'deleteEnd':
-                this.graphemes.splice(this.cursor)
+                this.replace(this.cursor, this.graphemes.length, '')
                 return {}
             case 'deleteWord':
                 this.deleteWord()
@@ -118,11 +114,39 @@ export class CommandBuffer {
         while (start > 0 && !/^\s$/u.test(this.graphemes[start - 1])) {
             start--
         }
-        this.graphemes.splice(start, this.cursor - start)
-        this.cursor = start
+        this.replace(start, this.cursor, '')
+    }
+
+    private replace (start: number, end: number, inserted: string): void {
+        const text = this.graphemes.join('')
+        const startOffset = offsetAt(this.graphemes, start)
+        const endOffset = offsetAt(this.graphemes, end)
+        const cursorOffset = startOffset + inserted.length
+        const updated = text.slice(0, startOffset) + inserted + text.slice(endOffset)
+        this.graphemes = segment(updated)
+        this.cursor = cursorAtOrAfterOffset(this.graphemes, cursorOffset)
     }
 }
 
 function segment (text: string): string[] {
     return Array.from(graphemeSegmenter.segment(text), part => part.segment)
+}
+
+function offsetAt (graphemes: readonly string[], cursor: number): number {
+    return graphemes.slice(0, cursor).reduce((offset, grapheme) => offset + grapheme.length, 0)
+}
+
+function cursorAtOrAfterOffset (graphemes: readonly string[], offset: number): number {
+    if (offset === 0) {
+        return 0
+    }
+
+    let endOffset = 0
+    for (let cursor = 0; cursor < graphemes.length; cursor++) {
+        endOffset += graphemes[cursor].length
+        if (endOffset >= offset) {
+            return cursor + 1
+        }
+    }
+    return graphemes.length
 }

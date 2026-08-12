@@ -9,6 +9,35 @@ describe('CommandBuffer', () => {
         expect(buffer.snapshot()).toMatchObject({ text: 'git x', cursor: 4, confident: true })
     })
 
+    test('re-segments a combining mark inserted after its base character', () => {
+        const buffer = new CommandBuffer()
+        buffer.apply({ type: 'insert', text: 'e' })
+        buffer.apply({ type: 'insert', text: '\u0301' })
+        expect(buffer.snapshot()).toMatchObject({ text: 'é', cursor: 1 })
+        buffer.apply({ type: 'backspace' })
+        expect(buffer.snapshot()).toMatchObject({ text: '', cursor: 0 })
+    })
+
+    test('re-segments a ZWJ family assembled across insert actions', () => {
+        const buffer = new CommandBuffer()
+        for (const text of ['👨', '\u200d', '👩', '\u200d', '👧', '\u200d', '👦']) {
+            buffer.apply({ type: 'insert', text })
+        }
+        expect(buffer.snapshot()).toMatchObject({ text: '👨‍👩‍👧‍👦', cursor: 1 })
+        buffer.apply({ type: 'backspace' })
+        expect(buffer.snapshot()).toMatchObject({ text: '', cursor: 0 })
+    })
+
+    test('keeps the cursor on a boundary when insertion merges both adjacent graphemes', () => {
+        const buffer = new CommandBuffer()
+        buffer.apply({ type: 'insert', text: '👨👩' })
+        buffer.apply({ type: 'left' })
+        buffer.apply({ type: 'insert', text: '\u200d' })
+        expect(buffer.snapshot()).toMatchObject({ text: '👨‍👩', cursor: 1 })
+        buffer.apply({ type: 'insert', text: 'x' })
+        expect(buffer.snapshot()).toMatchObject({ text: '👨‍👩x', cursor: 2 })
+    })
+
     test('inserts and pastes at the grapheme cursor', () => {
         const buffer = new CommandBuffer()
         buffer.apply({ type: 'insert', text: 'ac' })
