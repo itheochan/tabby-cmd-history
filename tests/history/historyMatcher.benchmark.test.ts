@@ -19,16 +19,20 @@ test('ranks 4096 entries under the 10 ms p95 budget', () => {
         weights: { ...DEFAULT_COMMAND_HISTORY_CONFIG.weights },
         bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings },
     }
-    const expected = matcher.query(entries, 'git ch', config, FIXED_NOW).map(item => item.command)
-
     expect(entries).toHaveLength(ENTRY_COUNT)
     expect(entries.filter(entry => entry.command.startsWith('git ch'))).toHaveLength(MATCH_COUNT)
+
+    let expected: string[] = []
+    for (let warmup = 0; warmup < WARMUP_COUNT; warmup++) {
+        const actual = matcher.query(entries, 'git ch', config, FIXED_NOW).map(item => item.command)
+        if (warmup === 0) {
+            expected = actual
+        } else {
+            expect(actual).toEqual(expected)
+        }
+    }
     expect(expected).toHaveLength(config.maxVisible)
     expect(expected.every(command => command.startsWith('git ch'))).toBe(true)
-
-    for (let warmup = 0; warmup < WARMUP_COUNT; warmup++) {
-        expect(matcher.query(entries, 'git ch', config, FIXED_NOW).map(item => item.command)).toEqual(expected)
-    }
 
     const samples: number[] = []
     for (let round = 0; round < SAMPLE_COUNT; round++) {

@@ -15,13 +15,16 @@ import { PredictionOverlay } from '../../src/ui/predictionOverlay'
 const ACTIVE_KEY = 'a'.repeat(64)
 const INPUT = Buffer.from('do-not-log-this')
 const INTERRUPT = Buffer.from([0x03])
-const RAW_EXCEPTION = 'raw-exception-private'
+const PRIVATE_PROFILE = 'private-profile'
+const PRIVATE_HOST = 'private-host.example'
+const PRIVATE_PATH = 'C:\\Users\\private-user\\AppData\\Roaming\\tabby\\cmd-history\\connections\\private.jsonl'
+const RAW_EXCEPTION = `fault command=${INPUT.toString()} profile=${PRIVATE_PROFILE} host=${PRIVATE_HOST} path=${PRIVATE_PATH}`
 
 describe('cross-component fail-open behavior', () => {
     test('passes raw input and Ctrl+C when the matcher throws synchronously', async () => {
         const repository = createRepository({ load: async () => [entry('do-not-log-this later')] })
         const matcher = new HistoryMatcher()
-        jest.spyOn(matcher, 'query').mockImplementation(() => { throw new Error(RAW_EXCEPTION) })
+        jest.spyOn(matcher, 'query').mockImplementation(() => { throw faultError() })
         const history = new HistoryService(repository, matcher, new SensitiveCommandFilter([]))
         const fixture = createFixture(history)
 
@@ -32,8 +35,8 @@ describe('cross-component fail-open behavior', () => {
     })
 
     test.each([
-        ['asynchronous rejection', (): Promise<HistoryEntry[]> => Promise.reject(new Error(RAW_EXCEPTION))],
-        ['synchronous throw', (): Promise<HistoryEntry[]> => { throw new Error(RAW_EXCEPTION) }],
+        ['asynchronous rejection', (): Promise<HistoryEntry[]> => Promise.reject(faultError())],
+        ['synchronous throw', (): Promise<HistoryEntry[]> => { throw faultError() }],
     ] as const)('passes raw input when repository load has an %s', async (_name, loadFault) => {
         const repository = createRepository({ load: loadFault })
         const history = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
@@ -50,7 +53,7 @@ describe('cross-component fail-open behavior', () => {
         const history: ControllerHistoryService = {
             query: identity => {
                 queriedKeys.push(identity.key)
-                return Promise.reject(new Error(RAW_EXCEPTION))
+                return Promise.reject(faultError())
             },
             record: async () => undefined,
         }
@@ -65,7 +68,7 @@ describe('cross-component fail-open behavior', () => {
     test('passes submitted bytes and Ctrl+C when repository record rejects asynchronously', async () => {
         const repository = createRepository({
             load: async () => [],
-            record: async () => { throw new Error(RAW_EXCEPTION) },
+            record: async () => { throw faultError() },
         })
         const history = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
         const fixture = createFixture(history)
@@ -89,15 +92,15 @@ describe('cross-component fail-open behavior', () => {
     test('passes raw input while repository clear throws synchronously', async () => {
         const repository = createRepository({
             load: async () => [entry('do-not-log-this later')],
-            clear: () => { throw new Error(RAW_EXCEPTION) },
+            clear: () => { throw faultError() },
         })
         const history = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
         const fixture = createFixture(history)
 
         fixture.terminal.send(INPUT)
         await settle()
-        await expect(history.clear({ key: ACTIVE_KEY, persistent: true, label: 'private-profile' }))
-            .rejects.toThrow(RAW_EXCEPTION)
+        await expect(history.clear({ key: ACTIVE_KEY, persistent: true, label: PRIVATE_PROFILE }))
+            .rejects.toThrow('fault command=')
         fixture.terminal.send(INTERRUPT)
         await settle()
 
@@ -120,16 +123,16 @@ describe('cross-component fail-open behavior', () => {
         }
         const overrides: Partial<CommandHistoryControllerDependencies> = {}
         if (fault === 'create') {
-            overrides.createOverlay = () => { throw new Error(RAW_EXCEPTION) }
+            overrides.createOverlay = () => { throw faultError() }
         } else if (fault === 'render') {
             overrides.createOverlay = host => {
                 const overlay = new PredictionOverlay(host)
-                jest.spyOn(overlay, 'render').mockImplementation(() => { throw new Error(RAW_EXCEPTION) })
+                jest.spyOn(overlay, 'render').mockImplementation(() => { throw faultError() })
                 return overlay
             }
         } else {
             overrides.geometry = {
-                measure: () => { throw new Error(RAW_EXCEPTION) },
+                measure: () => { throw faultError() },
             } as never
         }
         const fixture = createFixture(history, overrides)
@@ -196,7 +199,7 @@ function createFixture (
     const dependencies: CommandHistoryControllerDependencies = {
         history,
         identityResolver: {
-            resolve: () => ({ key: ACTIVE_KEY, persistent: true, label: 'private-profile' }),
+            resolve: () => ({ key: ACTIVE_KEY, persistent: true, label: PRIVATE_PROFILE }),
         },
         getConfig: () => config,
         logger: { warn: (...args: unknown[]) => logs.push(args.join(' ')) },
@@ -221,10 +224,10 @@ function createFixture (
 
 class FakeTerminal {
     readonly profile = {
-        id: 'private-profile',
+        id: PRIVATE_PROFILE,
         type: 'ssh',
-        name: 'private-profile',
-        options: { host: 'private-host' },
+        name: PRIVATE_PROFILE,
+        options: { host: PRIVATE_HOST },
     }
     readonly session = new FakeSession()
     readonly sessionChanged$ = new Subject<FakeSession | null>()
@@ -310,11 +313,18 @@ function rect (left: number, top: number, width: number, height: number): DOMRec
 
 function assertSafeLogs (logs: readonly string[]): void {
     const text = logs.join('\n')
-    expect(text).not.toContain(INPUT.toString())
-    expect(text).not.toContain('private-profile')
-    expect(text).not.toContain('private-host')
-    expect(text).not.toContain('secret-root')
-    expect(text).not.toContain(RAW_EXCEPTION)
+    for (const secret of [INPUT.toString(), PRIVATE_PROFILE, PRIVATE_HOST, PRIVATE_PATH, RAW_EXCEPTION]) {
+        expect(text).not.toContain(secret)
+    }
+}
+
+function faultError (): Error {
+    return Object.assign(new Error(RAW_EXCEPTION), {
+        command: INPUT.toString(),
+        profile: PRIVATE_PROFILE,
+        host: PRIVATE_HOST,
+        path: PRIVATE_PATH,
+    })
 }
 
 async function settle (): Promise<void> {

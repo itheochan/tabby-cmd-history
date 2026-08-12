@@ -1,7 +1,8 @@
 import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { filter, firstValueFrom, take } from 'rxjs'
+import { filter, firstValueFrom, Subject, take } from 'rxjs'
+import { SessionMiddlewareStack } from 'tabby-terminal'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from '../../src/config/historyConfig'
 import { SensitiveCommandFilter } from '../../src/history/commandPolicy'
 import { ConnectionIdentityResolver } from '../../src/history/connectionIdentity'
@@ -9,6 +10,7 @@ import { HistoryMatcher } from '../../src/history/historyMatcher'
 import { HistoryService } from '../../src/history/historyService'
 import { JsonlHistoryRepository } from '../../src/history/jsonlHistoryRepository'
 import { ConnectionIdentity } from '../../src/history/types'
+import { CommandHistoryController } from '../../src/terminal/commandHistoryController'
 
 const config = {
     ...DEFAULT_COMMAND_HISTORY_CONFIG,
@@ -61,7 +63,21 @@ describe('connection history isolation', () => {
         expect(changedKeys.filter(key => key === a1Identity.key)).not.toHaveLength(0)
         expect(changedKeys.filter(key => key === bIdentity.key)).not.toHaveLength(0)
 
+        const filesBeforeClear = (await readdir(join(root, 'connections'))).sort()
+        expect(filesBeforeClear).toEqual([
+            `${a1Identity.key}.jsonl`,
+            `${bIdentity.key}.jsonl`,
+        ].sort())
+        expect(filesBeforeClear.every(file => /^[a-f0-9]{64}\.jsonl$/u.test(file))).toBe(true)
+        expect(filesBeforeClear.join('\n')).not.toMatch(/A label|A renamed|B label|host-[ab]|git/u)
+
+        const aBefore = await readFile(connectionFile(root, a1Identity), 'utf8')
         const bBefore = await readFile(connectionFile(root, bIdentity), 'utf8')
+        expect(commandsFromJsonl(aBefore)).toEqual(['git checkout main'])
+        expect(commandsFromJsonl(bBefore)).toEqual(['git push'])
+        expect(aBefore).not.toContain('git push')
+        expect(bBefore).not.toContain('git checkout main')
+
         await service.clear(a1Identity)
 
         expect(await service.query(a1Identity, 'git', config)).toEqual([])
@@ -104,6 +120,93 @@ describe('connection history isolation', () => {
             .toEqual(['echo transient'])
         expect(await service.query(otherIdentity, 'echo', config)).toEqual([])
         expect(await connectionFiles(root)).toEqual([])
+    })
+
+    test('refreshes only same-key controllers through the real repository and service change chain', async () => {
+        const resolver = new ConnectionIdentityResolver()
+        const a1Terminal = new ControllerTerminal(profile('ssh:controller:a', 'A1'))
+        const a2Terminal = new ControllerTerminal(profile('ssh:controller:a', 'A2'))
+        const bTerminal = new ControllerTerminal(profile('ssh:controller:b', 'B'))
+        const aIdentity = resolver.resolve(a1Terminal.profile, a1Terminal)
+        const a2Identity = resolver.resolve(a2Terminal.profile, a2Terminal)
+        const bIdentity = resolver.resolve(bTerminal.profile, bTerminal)
+        expect(a2Identity.key).toBe(aIdentity.key)
+        expect(bIdentity.key).not.toBe(aIdentity.key)
+        const repository = new JsonlHistoryRepository(root)
+        const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+        await service.record(aIdentity, 'git checkout initial-a', capture, config, new Date('2026-08-12T10:00:00.000Z'))
+        await service.record(bIdentity, 'git checkout stable-b', capture, config, new Date('2026-08-12T10:00:00.000Z'))
+        const query = jest.spyOn(service, 'query')
+        const a1 = attachController(a1Terminal, service, resolver)
+        const a2 = attachController(a2Terminal, service, resolver)
+        const b = attachController(bTerminal, service, resolver)
+        const fixtures = [a1, a2, b]
+        const queryCount = (key: string): number => query.mock.calls.filter(call => call[0].key === key).length
+
+        try {
+            for (const fixture of fixtures) {
+                fixture.terminal.send(Buffer.from('git ch'))
+            }
+            await flushUntil(() => fixtures.every(fixture => fixture.controller.state().predictions.length === 1))
+
+            expect(a1.overlayVisible()).toBe(true)
+            expect(a2.overlayVisible()).toBe(true)
+            expect(b.overlayVisible()).toBe(true)
+            const initialAQueryCount = queryCount(aIdentity.key)
+            const initialBQueryCount = queryCount(bIdentity.key)
+            const bPredictions = b.controller.state().predictions
+            const bOverlayText = b.overlayText()
+            expect(initialAQueryCount).toBe(2)
+            expect(initialBQueryCount).toBe(1)
+
+            await service.record(
+                aIdentity,
+                'git cherry-pick new-a',
+                capture,
+                config,
+                new Date('2026-08-12T11:00:00.000Z'),
+            )
+            await flushUntil(() => predictionCommands(a1.controller).includes('git cherry-pick new-a'))
+
+            expect(predictionCommands(a2.controller)).toContain('git cherry-pick new-a')
+            expect(a1.overlayText()).toContain('git cherry-pick new-a')
+            expect(a2.overlayText()).toContain('git cherry-pick new-a')
+            expect(queryCount(aIdentity.key)).toBe(initialAQueryCount + 2)
+            expect(queryCount(bIdentity.key)).toBe(initialBQueryCount)
+            expect(b.controller.state().predictions).toEqual(bPredictions)
+            expect(b.overlayText()).toBe(bOverlayText)
+
+            await service.clear(aIdentity)
+
+            expect(a1.controller.state().predictions).toEqual([])
+            expect(a2.controller.state().predictions).toEqual([])
+            expect(a1.overlayVisible()).toBe(false)
+            expect(a2.overlayVisible()).toBe(false)
+            await flushUntil(() => queryCount(aIdentity.key) === initialAQueryCount + 4)
+            expect(queryCount(bIdentity.key)).toBe(initialBQueryCount)
+            expect(b.controller.state().predictions).toEqual(bPredictions)
+            expect(b.overlayText()).toBe(bOverlayText)
+
+            a2.controller.destroy()
+            const beforeDestroyedUpdate = queryCount(aIdentity.key)
+            await service.record(
+                aIdentity,
+                'git cherry-pick after-clear',
+                capture,
+                config,
+                new Date('2026-08-12T12:00:00.000Z'),
+            )
+            await flushUntil(() => predictionCommands(a1.controller).includes('git cherry-pick after-clear'))
+
+            expect(queryCount(aIdentity.key)).toBe(beforeDestroyedUpdate + 1)
+            expect(a1.overlayText()).toContain('git cherry-pick after-clear')
+            expect(a2.controller.state().predictions).toEqual([])
+            expect(a2Terminal.element.nativeElement.querySelector('.cmd-history-overlay')).toBeNull()
+            expect(queryCount(bIdentity.key)).toBe(initialBQueryCount)
+            expect(b.controller.state().predictions).toEqual(bPredictions)
+        } finally {
+            fixtures.forEach(fixture => fixture.controller.destroy())
+        }
     })
 
     test('does not reload for its own update and still refreshes an external same-key update', async () => {
@@ -190,5 +293,134 @@ async function connectionFiles (root: string): Promise<string[]> {
             return []
         }
         throw error
+    }
+}
+
+function commandsFromJsonl (contents: string): string[] {
+    return contents.split(/\r?\n/u)
+        .filter(Boolean)
+        .map(line => JSON.parse(line) as unknown)
+        .filter((event): event is { command: string } => isObject(event) && typeof event.command === 'string')
+        .map(event => event.command)
+}
+
+function isObject (value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null
+}
+
+function profile (id: string, name: string): { id: string; type: string; name: string; options: Record<string, unknown> } {
+    return { id, type: 'ssh', name, options: { host: `${name.toLowerCase()}.example` } }
+}
+
+function attachController (
+    terminal: ControllerTerminal,
+    history: HistoryService,
+    resolver: ConnectionIdentityResolver,
+): {
+    terminal: ControllerTerminal
+    controller: CommandHistoryController
+    overlayVisible: () => boolean
+    overlayText: () => string
+} {
+    // The terminal fixture mirrors the public lifecycle surface consumed by the real controller.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const controller = new CommandHistoryController(terminal as any, {
+        history,
+        identityResolver: resolver,
+        getConfig: () => config,
+        logger: { warn: jest.fn() },
+        now: () => new Date('2026-08-12T12:00:00.000Z'),
+    })
+    controller.attach()
+    const overlay = (): HTMLElement | null => terminal.element.nativeElement.querySelector('.cmd-history-overlay')
+    return {
+        terminal,
+        controller,
+        overlayVisible: () => overlay() !== null && overlay()?.hidden === false,
+        overlayText: () => overlay()?.textContent ?? '',
+    }
+}
+
+class ControllerTerminal {
+    readonly session = new ControllerSession()
+    readonly sessionChanged$ = new Subject<ControllerSession | null>()
+    readonly frontendReady$ = new Subject<void>()
+    readonly element = { nativeElement: document.createElement('div') }
+    readonly frontend = new ControllerFrontend()
+    alternateScreenActive = false
+
+    get resize$ (): Subject<void> {
+        return this.frontend.resize$
+    }
+
+    get alternateScreenActive$ (): Subject<boolean> {
+        return this.frontend.alternateScreenActive$
+    }
+
+    constructor (readonly profile: { id: string; type: string; name: string; options: Record<string, unknown> }) {
+        const screen = document.createElement('div')
+        screen.className = 'xterm-screen'
+        this.element.nativeElement.append(screen)
+        jest.spyOn(this.element.nativeElement, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 800, 480))
+        jest.spyOn(screen, 'getBoundingClientRect').mockReturnValue(rect(0, 0, 800, 480))
+    }
+
+    send (data: Buffer): void {
+        this.session.middleware.feedFromTerminal(data)
+    }
+}
+
+class ControllerSession {
+    readonly middleware = new SessionMiddlewareStack()
+}
+
+class ControllerFrontend {
+    readonly contentUpdated$ = new Subject<void>()
+    readonly destroyed$ = new Subject<void>()
+    readonly resize$ = new Subject<void>()
+    readonly alternateScreenActive$ = new Subject<boolean>()
+    readonly xterm = {
+        cols: 80,
+        rows: 24,
+        buffer: { active: {
+            cursorX: 0,
+            cursorY: 0,
+            baseY: 0,
+            getLine: () => ({ isWrapped: false, translateToString: () => '' }),
+        } },
+        onScroll: () => ({ dispose: () => undefined }),
+        onSelectionChange: () => ({ dispose: () => undefined }),
+    }
+
+    supportsBracketedPaste (): boolean {
+        return true
+    }
+}
+
+function predictionCommands (controller: CommandHistoryController): string[] {
+    return controller.state().predictions.map(item => item.command)
+}
+
+async function flushUntil (predicate: () => boolean): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+        if (predicate()) {
+            return
+        }
+        await Promise.resolve()
+    }
+    throw new Error('Timed out while flushing deterministic controller promises')
+}
+
+function rect (left: number, top: number, width: number, height: number): DOMRect {
+    return {
+        left,
+        top,
+        width,
+        height,
+        right: left + width,
+        bottom: top + height,
+        x: left,
+        y: top,
+        toJSON: () => ({}),
     }
 }
