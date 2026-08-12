@@ -6,12 +6,17 @@ export function normalizeCommand (command: string): string {
 
 export class SensitiveCommandFilter {
     private patterns: RegExp[] = []
+    private patternSources: string[] = []
 
     constructor (patterns: string[]) {
         this.replacePatterns(patterns)
     }
 
     replacePatterns (patterns: string[]): void {
+        if (patterns.length === this.patternSources.length &&
+            patterns.every((pattern, index) => pattern === this.patternSources[index])) {
+            return
+        }
         const next = patterns.map(source => {
             try {
                 return new RegExp(source, 'i')
@@ -20,6 +25,7 @@ export class SensitiveCommandFilter {
             }
         })
         this.patterns = next
+        this.patternSources = [...patterns]
     }
 
     allows (command: string, enabled: boolean): boolean {

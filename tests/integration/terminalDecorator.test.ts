@@ -84,6 +84,21 @@ test('double attach creates one controller, middleware, and overlay', () => {
     expect(terminal.element.nativeElement.querySelectorAll('.cmd-history-overlay')).toHaveLength(1)
 })
 
+test('passes the terminal lifetime token to identity resolution', () => {
+    const terminal = createTerminal()
+    const resolver = { resolve: jest.fn(() => ({ key: 'b'.repeat(64), persistent: true, label: 'Saved' })) }
+    const decorator = new CommandHistoryTerminalDecorator(
+        { store: { cmdHistory: DEFAULT_COMMAND_HISTORY_CONFIG }, changed$: new Subject<void>() } as any,
+        { create: () => ({ warn: jest.fn() }) } as any,
+        { query: jest.fn(), record: jest.fn() } as any,
+        resolver as any,
+    )
+
+    decorator.attach(terminal as any)
+
+    expect(resolver.resolve).toHaveBeenCalledWith(terminal.profile, terminal)
+})
+
 test('detach is idempotent and destroys controller before calling the base lifecycle', () => {
     const terminal = createTerminal()
     const { decorator, destroyed } = createDecorator()

@@ -61,6 +61,7 @@ export class HistoryService {
         }
 
         const normalized = normalizeCommand(command)
+        this.sensitiveFilter.replacePatterns(config.exclusionPatterns)
         if (!normalized || !this.sensitiveFilter.allows(normalized, config.sensitiveFiltering)) {
             return
         }

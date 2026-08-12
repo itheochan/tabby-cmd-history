@@ -77,6 +77,17 @@ test('records only commands accepted by trust, visible echo, normalization, and 
     expect(repository.record).toHaveBeenCalledWith('a', 'git status', at, 4096)
 })
 
+test('applies updated exclusion patterns from the runtime config', async () => {
+    const repository = fakeRepository()
+    const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))
+    const at = new Date('2026-08-12T12:00:00Z')
+    const updated = { ...defaults, exclusionPatterns: ['private-host'] }
+
+    await service.record(identity('a'), 'ssh private-host', { trustworthy: true, visibleEcho: true }, updated, at)
+
+    expect(repository.record).not.toHaveBeenCalled()
+})
+
 test('permissive capture bypasses only visible echo', async () => {
     const repository = fakeRepository()
     const service = new HistoryService(repository, new HistoryMatcher(), new SensitiveCommandFilter([]))

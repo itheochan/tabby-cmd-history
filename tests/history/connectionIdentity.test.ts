@@ -2,6 +2,15 @@ import { ConnectionIdentityResolver, resolveDefaultDataRoot } from '../../src/hi
 
 const resolver = new ConnectionIdentityResolver()
 
+test('uses a stable distinct memory key for each terminal lifetime object', () => {
+    const profile = { type: 'unknown' }
+    const firstTerminal = {}
+    const secondTerminal = {}
+
+    expect(resolver.resolve(profile, firstTerminal)).toEqual(resolver.resolve(profile, firstTerminal))
+    expect(resolver.resolve(profile, firstTerminal).key).not.toBe(resolver.resolve(profile, secondTerminal).key)
+})
+
 test('saved profiles use type and stable id, not display name', () => {
     const a = resolver.resolve({ id: 'ssh:custom:abc', type: 'ssh', name: 'Old', options: { host: 'a' } }, 'tab-a')
     const b = resolver.resolve({ id: 'ssh:custom:abc', type: 'ssh', name: 'New', options: { host: 'b' } }, 'tab-b')

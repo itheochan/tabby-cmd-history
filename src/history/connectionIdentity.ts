@@ -14,10 +14,13 @@ type SafeValue = null | boolean | number | string | SafeValue[] | { [key: string
 const SENSITIVE_OR_VOLATILE_KEY = /(?:pass(?:word|phrase|wd)?|token|secret|credential|authorization|api[_-]?key|private[_-]?key|environment|env|cwd|working[_-]?directory|window|columns|rows|process[_-]?id|pid|pty|restore|session)/iu
 
 export class ConnectionIdentityResolver {
-    resolve (profile: ProfileLike, tabLifetimeKey: string): ConnectionIdentity {
+    private readonly lifetimeKeys = new WeakMap<object, string>()
+    private lifetimeSequence = 0
+
+    resolve (profile: ProfileLike, tabLifetime: string | object): ConnectionIdentity {
         const canonical = this.resolveCanonical(profile)
         if (!canonical) {
-            return { key: `memory:${tabLifetimeKey}`, persistent: false, label: 'Temporary terminal' }
+            return { key: `memory:${this.resolveLifetimeKey(tabLifetime)}`, persistent: false, label: 'Temporary terminal' }
         }
 
         return {
@@ -25,6 +28,19 @@ export class ConnectionIdentityResolver {
             persistent: true,
             label: profile.id ? 'Saved connection' : 'Temporary connection',
         }
+    }
+
+    private resolveLifetimeKey (tabLifetime: string | object): string {
+        if (typeof tabLifetime === 'string') {
+            return tabLifetime
+        }
+        const existing = this.lifetimeKeys.get(tabLifetime)
+        if (existing) {
+            return existing
+        }
+        const assigned = `tab-${++this.lifetimeSequence}`
+        this.lifetimeKeys.set(tabLifetime, assigned)
+        return assigned
     }
 
     private resolveCanonical (profile: ProfileLike): string | undefined {

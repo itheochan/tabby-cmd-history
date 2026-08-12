@@ -83,8 +83,6 @@ interface FrontendFacade {
     supportsBracketedPaste: () => boolean
 }
 
-let controllerSequence = 0
-
 export class CommandHistoryController {
     private readonly buffer = new CommandBuffer()
     private readonly subscriptions: Subscription[] = []
@@ -92,7 +90,6 @@ export class CommandHistoryController {
     private readonly frontendDisposables: Disposable[] = []
     private readonly echoVerifier: VisibleEchoVerifier
     private readonly geometry: TerminalGeometryAdapter
-    private readonly tabLifetimeKey = `tab-${++controllerSequence}`
     private middleware?: CommandInputMiddleware
     private attachedSession: BaseSession | null = null
     private overlay?: PredictionOverlay
@@ -115,7 +112,7 @@ export class CommandHistoryController {
         this.config = this.readConfig(DEFAULT_COMMAND_HISTORY_CONFIG)
         this.identity = dependencies.identityResolver.resolve(
             terminal.profile as ProfileLike,
-            this.tabLifetimeKey,
+            terminal,
         )
         this.echoVerifier = dependencies.echoVerifier ?? new VisibleEchoVerifier()
         this.geometry = dependencies.geometry ?? new TerminalGeometryAdapter()
@@ -241,7 +238,7 @@ export class CommandHistoryController {
         this.buffer.reset()
         this.identity = this.dependencies.identityResolver.resolve(
             this.terminal.profile as ProfileLike,
-            this.tabLifetimeKey,
+            this.terminal,
         )
         this.attachSession(session)
         this.attachFrontend()

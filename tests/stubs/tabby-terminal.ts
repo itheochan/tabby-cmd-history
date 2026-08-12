@@ -96,6 +96,7 @@ export class BaseSession {
 
 export class BaseTerminalTabComponent<P> {
     profile!: P
+    title = ''
     frontend?: {
         resize$: Observable<unknown>
         alternateScreenActive$: Observable<boolean>

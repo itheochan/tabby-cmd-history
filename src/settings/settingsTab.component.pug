@@ -1,0 +1,83 @@
+.cmd-history-settings
+    h3 Command history
+    p.text-muted Configure per-connection history predictions and capture safety.
+
+    .form-check.mb-3
+        input#cmd-history-enabled.form-check-input(type='checkbox' '[(ngModel)]'='draft.enabled')
+        label.form-check-label(for='cmd-history-enabled') Enable command history predictions
+
+    .form-group
+        label(for='cmd-history-presentation') Presentation
+        select#cmd-history-presentation.form-control('[(ngModel)]'='draft.presentation' aria-describedby='cmd-history-presentation-help')
+            option('*ngFor'='let mode of presentationModes' '[ngValue]'='mode') {{ mode }}
+        small#cmd-history-presentation-help.form-text.text-muted Inline shows a suffix, list shows candidates, and hybrid starts inline.
+
+    .settings-grid
+        .form-group
+            label(for='cmd-history-max-visible') Maximum visible candidates
+            input#cmd-history-max-visible.form-control(type='number' min='1' max='20' step='1' '[(ngModel)]'='draft.maxVisible')
+        .form-group
+            label(for='cmd-history-min-query') Minimum query length
+            input#cmd-history-min-query.form-control(type='number' min='1' max='20' step='1' '[(ngModel)]'='draft.minQueryLength')
+        .form-group
+            label(for='cmd-history-capacity') History capacity per connection
+            input#cmd-history-capacity.form-control(type='number' min='1' max='100000' step='1' '[(ngModel)]'='draft.capacity')
+
+    .form-check.mb-3
+        input#cmd-history-case-sensitive.form-check-input(type='checkbox' '[(ngModel)]'='draft.caseSensitive')
+        label.form-check-label(for='cmd-history-case-sensitive') Case-sensitive matching
+
+    fieldset
+        legend Score weights
+        p.form-text.text-muted Values are normalized when saved and must have a positive total.
+        .settings-grid
+            .form-group
+                label(for='cmd-history-weight-recency') Recency
+                input#cmd-history-weight-recency.form-control(type='number' min='0' step='0.01' '[(ngModel)]'='draft.weights.recency')
+            .form-group
+                label(for='cmd-history-weight-frequency') Frequency
+                input#cmd-history-weight-frequency.form-control(type='number' min='0' step='0.01' '[(ngModel)]'='draft.weights.frequency')
+            .form-group
+                label(for='cmd-history-weight-closeness') Match closeness
+                input#cmd-history-weight-closeness.form-control(type='number' min='0' step='0.01' '[(ngModel)]'='draft.weights.matchCloseness')
+
+    .form-group
+        label(for='cmd-history-capture-mode') Capture mode
+        select#cmd-history-capture-mode.form-control('[(ngModel)]'='draft.captureMode' aria-describedby='cmd-history-capture-warning')
+            option('*ngFor'='let mode of captureModes' '[ngValue]'='mode') {{ mode }}
+        .alert.alert-warning#cmd-history-capture-warning(role='alert') Permissive mode may save commands when visible shell echo cannot be verified. Use it only when you accept that risk.
+
+    .form-check.mb-3
+        input#cmd-history-sensitive-filtering.form-check-input(type='checkbox' '[(ngModel)]'='draft.sensitiveFiltering')
+        label.form-check-label(for='cmd-history-sensitive-filtering') Filter commands that may contain sensitive values
+
+    .form-group
+        label(for='cmd-history-exclusions') Exclusion patterns
+        textarea#cmd-history-exclusions.form-control(rows='5' '[(ngModel)]'='exclusionText' aria-describedby='cmd-history-exclusions-help')
+        small#cmd-history-exclusions-help.form-text.text-muted One regular expression per line. Matching commands are not saved.
+
+    fieldset
+        legend Keyboard bindings
+        p.form-text.text-muted Choose non-printable keys. Ctrl+C is never intercepted.
+        .settings-grid
+            .form-group('*ngFor'='let binding of [{ key: "previous", label: "Previous candidate" }, { key: "next", label: "Next candidate" }, { key: "accept", label: "Accept candidate" }, { key: "dismiss", label: "Dismiss candidates" }]')
+                label('[for]'='"cmd-history-binding-" + binding.key') {{ binding.label }}
+                select.form-control('[id]'='"cmd-history-binding-" + binding.key' '[(ngModel)]'='draft.bindings[binding.key]')
+                    option('*ngFor'='let key of bindingOptions' '[ngValue]'='key') {{ key }}
+
+    .form-group
+        label(for='cmd-history-data-root') Custom data directory (optional)
+        input#cmd-history-data-root.form-control(type='text' '[(ngModel)]'='draft.dataRoot' aria-describedby='cmd-history-data-root-help')
+        small#cmd-history-data-root-help.form-text.text-muted Leave blank to use Tabby’s default application data directory.
+
+    .alert.alert-danger('*ngIf'='validationError' role='alert') {{ validationError }}
+    .alert.alert-info('*ngIf'='actionMessage' role='status' aria-live='polite') {{ actionMessage }}
+
+    .settings-actions
+        button.btn.btn-primary(type='button' '(click)'='save()' '[disabled]'='saving || clearing')
+            span('*ngIf'='saving') Saving…
+            span('*ngIf'='!saving') Save
+        button.btn.btn-outline-danger(type='button' '(click)'='clearActiveConnection()' '[disabled]'='!canClearCurrentConnection || saving' aria-describedby='cmd-history-clear-help')
+            span('*ngIf'='clearing') Clearing…
+            span('*ngIf'='!clearing') Clear Current Connection
+    small#cmd-history-clear-help.form-text.text-muted Clears history only for the focused terminal connection after confirmation.

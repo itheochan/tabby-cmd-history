@@ -1,7 +1,10 @@
+import { CommonModule } from '@angular/common'
 import { NgModule } from '@angular/core'
+import { FormsModule } from '@angular/forms'
 import { homedir } from 'node:os'
 import { ConfigProvider, ConfigService, LogService } from 'tabby-core'
 import { TerminalDecorator } from 'tabby-terminal'
+import { SettingsTabProvider } from 'tabby-settings'
 import { CommandHistoryConfigProvider } from './config/configProvider'
 import { DEFAULT_COMMAND_HISTORY_CONFIG } from './config/historyConfig'
 import { SensitiveCommandFilter } from './history/commandPolicy'
@@ -10,10 +13,15 @@ import { HistoryMatcher } from './history/historyMatcher'
 import { HistoryService } from './history/historyService'
 import { JsonlHistoryRepository } from './history/jsonlHistoryRepository'
 import { CommandHistoryTerminalDecorator } from './terminal/commandHistoryDecorator'
+import { CommandHistorySettingsTabComponent } from './settings/settingsTab.component'
+import { CommandHistorySettingsTabProvider } from './settings/settingsTabProvider'
 
 @NgModule({
+    imports: [CommonModule, FormsModule],
+    declarations: [CommandHistorySettingsTabComponent],
     providers: [
         { provide: ConfigProvider, useClass: CommandHistoryConfigProvider, multi: true },
+        { provide: SettingsTabProvider, useClass: CommandHistorySettingsTabProvider, multi: true },
         ConnectionIdentityResolver,
         HistoryMatcher,
         {

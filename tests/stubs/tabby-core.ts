@@ -15,6 +15,33 @@ export class ConfigService {
     emitChange (): void {
         this.changed.next()
     }
+
+    async save (): Promise<void> {
+        this.emitChange()
+    }
+}
+
+export class AppService {
+    activeTab: unknown = null
+}
+
+export class SplitTabComponent {
+    constructor (private readonly focusedTab: unknown = null) {}
+
+    getFocusedTab (): unknown {
+        return this.focusedTab
+    }
+}
+
+export abstract class PlatformService {
+    abstract showMessageBox (options: {
+        type: 'warning' | 'error'
+        message: string
+        detail?: string
+        buttons: string[]
+        defaultId?: number
+        cancelId?: number
+    }): Promise<{ response: number }>
 }
 
 export abstract class Logger {

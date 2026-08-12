@@ -34,11 +34,21 @@ export const DEFAULT_COMMAND_HISTORY_CONFIG: Readonly<CommandHistoryConfig> = Ob
 })
 
 export function validateHistoryConfig (config: CommandHistoryConfig): CommandHistoryConfig {
+    if (!(['inline', 'list', 'hybrid'] as const).includes(config.presentation)) {
+        throw new Error('Presentation mode is not supported')
+    }
+    if (!(['strict', 'permissive'] as const).includes(config.captureMode)) {
+        throw new Error('Capture mode is not supported')
+    }
     validateLimit('maxVisible', config.maxVisible, 1, 20)
     validateLimit('minQueryLength', config.minQueryLength, 1, 20)
     validateLimit('capacity', config.capacity, 1, 100000)
     validateBindings(config.bindings)
 
+    const weights = Object.values(config.weights)
+    if (weights.some(weight => !Number.isFinite(weight) || weight < 0)) {
+        throw new Error('Weights must be finite non-negative numbers')
+    }
     const totalWeight = config.weights.recency + config.weights.frequency + config.weights.matchCloseness
     if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
         throw new Error('Weights must have a positive total')
@@ -63,6 +73,10 @@ function validateLimit (name: string, value: number, minimum: number, maximum: n
 }
 
 function validateBindings (bindings: CommandHistoryConfig['bindings']): void {
+    const allowed = new Set<HistoryKeyName>([
+        'ArrowUp', 'ArrowDown', 'ArrowRight', 'Escape',
+        'Ctrl+ArrowUp', 'Ctrl+ArrowDown', 'Ctrl+ArrowRight',
+    ])
     for (const binding of Object.values(bindings)) {
         const bindingName: string = binding
         if (bindingName === 'Ctrl+C') {
@@ -70,6 +84,9 @@ function validateBindings (bindings: CommandHistoryConfig['bindings']): void {
         }
         if (isPrintableCharacter(bindingName)) {
             throw new Error(`Printable character cannot be used as a command history binding: ${bindingName}`)
+        }
+        if (!allowed.has(binding)) {
+            throw new Error('Command history binding is not supported')
         }
     }
 }

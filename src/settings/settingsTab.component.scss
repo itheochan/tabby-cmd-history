@@ -1,0 +1,28 @@
+.cmd-history-settings {
+    max-width: 760px;
+    padding-bottom: 2rem;
+
+    fieldset {
+        border: 0;
+        margin: 1.5rem 0;
+        padding: 0;
+    }
+
+    legend {
+        font-size: 1rem;
+        font-weight: 600;
+    }
+
+    .settings-grid {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    }
+
+    .settings-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: .75rem;
+        margin-top: 1.5rem;
+    }
+}
