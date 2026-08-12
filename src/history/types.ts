@@ -15,3 +15,8 @@ export interface ConnectionIdentity {
     persistent: boolean
     label: string
 }
+
+export interface HistoryRepositoryMutation {
+    key: string
+    origin?: object
+}

@@ -8,7 +8,7 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Observable, Subject } from 'rxjs'
-import { HistoryEntry } from './types'
+import { HistoryEntry, HistoryRepositoryMutation } from './types'
 
 interface RepositoryOptions {
     compactBytes?: number
@@ -72,6 +72,7 @@ type FailureStage = 'read' | 'append' | 'compact' | 'clear'
 
 export class JsonlHistoryRepository {
     readonly updates$: Observable<string>
+    readonly mutationUpdates$: Observable<HistoryRepositoryMutation>
 
     private readonly root: string
     private readonly compactBytes: number
@@ -79,6 +80,7 @@ export class JsonlHistoryRepository {
     private readonly fileOperations: JsonlHistoryFileOperations
     private readonly warn?: (message: string) => void
     private readonly updatesSubject = new Subject<string>()
+    private readonly mutationUpdatesSubject = new Subject<HistoryRepositoryMutation>()
 
     constructor (root: string, options: RepositoryOptions = {}) {
         this.root = resolve(root)
@@ -87,6 +89,7 @@ export class JsonlHistoryRepository {
         this.fileOperations = { ...DEFAULT_FILE_OPERATIONS, ...options.fileOperations }
         this.warn = options.warn
         this.updates$ = this.updatesSubject.asObservable()
+        this.mutationUpdates$ = this.mutationUpdatesSubject.asObservable()
     }
 
     async load (key: string, capacity: number): Promise<HistoryEntry[]> {
@@ -98,7 +101,7 @@ export class JsonlHistoryRepository {
         })
     }
 
-    async record (key: string, command: string, at: Date, capacity: number): Promise<HistoryEntry[]> {
+    async record (key: string, command: string, at: Date, capacity: number, origin?: object): Promise<HistoryEntry[]> {
         const file = this.fileFor(key)
         return runSerial(file, async () => {
             const state = await this.loadState(key, file)
@@ -111,6 +114,7 @@ export class JsonlHistoryRepository {
             applyUse(state.entries, normalizedCommand, timestamp)
             trimToCapacity(state.entries, capacity)
             this.updatesSubject.next(key)
+            this.mutationUpdatesSubject.next({ key, origin })
 
             if (state.storageAvailable) {
                 const event: UseEvent = { v: 1, kind: 'use', command: normalizedCommand, at: timestamp }
@@ -140,7 +144,7 @@ export class JsonlHistoryRepository {
         })
     }
 
-    async clear (key: string): Promise<void> {
+    async clear (key: string, origin?: object): Promise<void> {
         const file = this.fileFor(key)
         await runSerial(file, async () => {
             try {
@@ -152,6 +156,7 @@ export class JsonlHistoryRepository {
             }
             states.set(file, emptyState(true))
             this.updatesSubject.next(key)
+            this.mutationUpdatesSubject.next({ key, origin })
         })
     }
 

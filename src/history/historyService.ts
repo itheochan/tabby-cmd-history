@@ -2,13 +2,14 @@ import { Observable, Subject } from 'rxjs'
 import { CommandHistoryConfig } from '../config/historyConfig'
 import { normalizeCommand, SensitiveCommandFilter } from './commandPolicy'
 import { HistoryMatcher } from './historyMatcher'
-import { ConnectionIdentity, HistoryEntry, Prediction } from './types'
+import { ConnectionIdentity, HistoryEntry, HistoryRepositoryMutation, Prediction } from './types'
 
 export interface HistoryRepository {
     readonly updates$: Observable<string>
+    readonly mutationUpdates$?: Observable<HistoryRepositoryMutation>
     load: (key: string, capacity: number) => Promise<HistoryEntry[]>
-    record: (key: string, command: string, at: Date, capacity: number) => Promise<HistoryEntry[]>
-    clear: (key: string) => Promise<void>
+    record: (key: string, command: string, at: Date, capacity: number, origin?: object) => Promise<HistoryEntry[]>
+    clear: (key: string, origin?: object) => Promise<void>
 }
 
 export interface CaptureEvidence {
@@ -24,6 +25,7 @@ export class HistoryService {
     private readonly persistentGenerations = new Map<string, number>()
     private readonly memoryEntries = new Map<string, HistoryEntry[]>()
     private readonly changesSubject = new Subject<string>()
+    private readonly repositoryOrigin = {}
 
     constructor (
         private readonly repository: HistoryRepository,
@@ -31,7 +33,15 @@ export class HistoryService {
         private readonly sensitiveFilter: SensitiveCommandFilter,
     ) {
         this.changes$ = this.changesSubject.asObservable()
-        repository.updates$.subscribe(key => this.refreshPersistentKey(key))
+        if (repository.mutationUpdates$) {
+            repository.mutationUpdates$.subscribe(update => {
+                if (update.origin !== this.repositoryOrigin) {
+                    this.refreshPersistentKey(update.key)
+                }
+            })
+        } else {
+            repository.updates$.subscribe(key => this.refreshPersistentKey(key))
+        }
     }
 
     async query (
@@ -83,10 +93,13 @@ export class HistoryService {
 
         this.persistentCapacities.set(identity.key, config.capacity)
         const generation = this.nextGeneration(identity.key)
+        const recording = this.repository.mutationUpdates$
+            ? this.repository.record(identity.key, normalized, at, config.capacity, this.repositoryOrigin)
+            : this.repository.record(identity.key, normalized, at, config.capacity)
         await this.installPersistent(
             identity.key,
             generation,
-            this.repository.record(identity.key, normalized, at, config.capacity),
+            recording,
             true,
         )
     }
@@ -102,10 +115,13 @@ export class HistoryService {
         const previous = this.persistentEntries.get(identity.key)
         const generation = this.nextGeneration(identity.key)
         try {
+            const clearing = this.repository.mutationUpdates$
+                ? this.repository.clear(identity.key, this.repositoryOrigin)
+                : this.repository.clear(identity.key)
             await this.installPersistent(
                 identity.key,
                 generation,
-                this.repository.clear(identity.key).then(() => []),
+                clearing.then(() => []),
                 true,
             )
         } catch (error) {
