@@ -348,6 +348,106 @@ describe('CommandHistoryController', () => {
         expect(fixture.controller.state().predictions).toEqual([])
     })
 
+    test('Tab clears the cache so it cannot diverge from the rewritten line', async () => {
+        const fixture = createFixture(['systemctl status'])
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl stat' },
+        ]
+        fixture.terminal.send('systemctl stat')
+        await settle()
+        expect(fixture.controller.state().buffer).toMatchObject({ text: 'systemctl stat', confident: true })
+
+        fixture.terminal.send(Buffer.from([0x09]))
+        // The shell rewrote the visible line; the cache must not keep stale text.
+        expect(fixture.controller.state().buffer).toMatchObject({ text: '', confident: false })
+        expect(fixture.controller.state().predictions).toEqual([])
+    })
+
+    test('recovers and records a Tab-completed command continued by typing', async () => {
+        const fixture = createFixture()
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl stat' },
+        ]
+        fixture.terminal.send('systemctl stat')
+        await settle()
+        fixture.terminal.send(Buffer.from([0x09]))
+        // Shell completion rewrites the line before the user continues.
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl status ' },
+        ]
+        fixture.terminal.send('mysvc.service')
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl status mysvc.service' },
+        ]
+        fixture.terminal.send(Buffer.from([0x0d]))
+        await settle()
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.objectContaining({ key: 'a'.repeat(64) }),
+            'systemctl status mysvc.service',
+            { trustworthy: true, visibleEcho: true },
+            expect.anything(),
+            expect.anything(),
+        )
+    })
+
+    test('records a Tab-completed command even when Enter follows immediately', async () => {
+        const fixture = createFixture()
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl stat' },
+        ]
+        fixture.terminal.send('systemctl stat')
+        await settle()
+        fixture.terminal.send(Buffer.from([0x09]))
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl status' },
+        ]
+        fixture.terminal.send(Buffer.from([0x0d]))
+        await settle()
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.anything(),
+            'systemctl status',
+            { trustworthy: true, visibleEcho: true },
+            expect.anything(),
+            expect.anything(),
+        )
+    })
+
+    test('does not record an untrusted submission when the line cannot be rebuilt', async () => {
+        const fixture = createFixture()
+        fixture.terminal.send('git')
+        await settle()
+        fixture.terminal.send(Buffer.from([0x09]))
+        // No visible line carries the pre-rewrite anchor; recovery must fail closed.
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ unrelated text' },
+        ]
+        fixture.terminal.send(Buffer.from([0x0d]))
+        await settle()
+        expect(fixture.history.record).not.toHaveBeenCalled()
+    })
+
+    test('a pager alternate-screen event does not cancel a just-submitted record', async () => {
+        const fixture = createFixture()
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl status mysvc.service' },
+        ]
+        fixture.terminal.send('systemctl status mysvc.service')
+        fixture.terminal.send(Buffer.from([0x0d]))
+        // systemctl status opens less immediately; the alternate event can arrive
+        // before the record microtask drains.
+        fixture.terminal.emitAlternate(true)
+        await settle()
+        fixture.terminal.emitAlternate(false)
+        await settle()
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.anything(),
+            'systemctl status mysvc.service',
+            { trustworthy: true, visibleEcho: true },
+            expect.anything(),
+            expect.anything(),
+        )
+    })
+
     test('captures complete current cursor logical rows before forwarding Enter', async () => {
         const fixture = createFixture()
         fixture.terminal.frontend!.lines = [

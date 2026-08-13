@@ -55,6 +55,12 @@ export interface CommandHistoryControllerState {
     identity: ConnectionIdentity
 }
 
+interface SubmittedCommand {
+    command: string
+    trustworthy: boolean
+    visibleEcho: boolean
+}
+
 interface XtermLine {
     isWrapped: boolean
     translateToString: (trimRight?: boolean) => string
@@ -103,6 +109,7 @@ export class CommandHistoryController {
     private frontendAvailable = false
     private queryGeneration = 0
     private recordEpoch = 0
+    private pendingAnchor: string | null = null
     private attached = false
     private destroyed = false
 
@@ -137,6 +144,7 @@ export class CommandHistoryController {
         this.destroyed = true
         this.attached = false
         this.recordEpoch++
+        this.clearPendingAnchor()
         this.invalidatePredictions()
         this.detachSession()
         this.detachFrontend()
@@ -164,6 +172,7 @@ export class CommandHistoryController {
     private route = (action: TerminalInputAction): InputRouteDecision => {
         if (action.type === 'interrupt') {
             this.recordEpoch++
+            this.clearPendingAnchor()
             this.invalidatePredictions()
             this.buffer.apply(action)
             return { consume: false, action }
@@ -198,6 +207,14 @@ export class CommandHistoryController {
         }
 
         if (action.type === 'unknown' || isShellManagedKey(action)) {
+            const before = this.buffer.snapshot()
+            // The shell may have rewritten the visible line (Tab completion, shell
+            // history, unknown control sequences). Remember the trusted text as an
+            // anchor so submit() can recover the full command from the visible line,
+            // then clear the buffer to avoid diverging stale text.
+            if (before.confident && before.text) {
+                this.pendingAnchor = before.text
+            }
             this.buffer.apply({ type: 'unknown' })
             this.invalidatePredictions()
             return { consume: false, action }
@@ -238,6 +255,7 @@ export class CommandHistoryController {
     private handleSessionChanged (session: BaseSession | null): void {
         this.recordEpoch++
         this.detachSession()
+        this.clearPendingAnchor()
         this.invalidatePredictions()
         this.buffer.reset()
         this.identity = this.dependencies.identityResolver.resolve(
@@ -361,6 +379,7 @@ export class CommandHistoryController {
         this.config = this.readConfig(previous)
         this.invalidatePredictions()
         if (!this.config.enabled) {
+            this.clearPendingAnchor()
             this.buffer.reset()
             return
         }
@@ -393,7 +412,7 @@ export class CommandHistoryController {
 
     private setAlternate (active: boolean): void {
         this.alternateActive = active
-        this.recordEpoch++
+        this.clearPendingAnchor()
         this.invalidatePredictions()
         this.buffer.apply({ type: 'alternate', active })
     }
@@ -492,27 +511,17 @@ export class CommandHistoryController {
 
     private submit (): void {
         const before = this.buffer.snapshot()
-        let visibleEcho = false
-        if (before.confident && before.text) {
-            try {
-                visibleEcho = this.echoVerifier.matches(
-                    this.captureCurrentLogicalLines(before.text),
-                    before.text,
-                )
-            } catch (error) {
-                this.warn('echo', error)
-            }
-        }
-        const result = this.buffer.apply({ type: 'enter' })
+        const submitted = this.resolveSubmitted(before)
+        this.buffer.apply({ type: 'enter' })
+        this.clearPendingAnchor()
         this.invalidatePredictions()
-        if (!result.submitted) {
+        if (!submitted) {
             return
         }
 
         const epoch = this.recordEpoch
         const identity = this.identity
         const config = cloneConfig(this.config)
-        const command = result.submitted
         const at = this.now()
         queueMicrotask(() => {
             if (this.destroyed || epoch !== this.recordEpoch) {
@@ -521,13 +530,53 @@ export class CommandHistoryController {
             void Promise.resolve()
                 .then(() => this.dependencies.history.record(
                     identity,
-                    command,
-                    { trustworthy: before.confident, visibleEcho },
+                    submitted.command,
+                    { trustworthy: submitted.trustworthy, visibleEcho: submitted.visibleEcho },
                     config,
                     at,
                 ))
                 .catch(() => this.warn('record'))
         })
+    }
+
+    private resolveSubmitted (before: BufferState): SubmittedCommand | null {
+        if (before.confident && before.text) {
+            return {
+                command: before.text,
+                trustworthy: true,
+                visibleEcho: this.verifyVisibleEcho(before.text),
+            }
+        }
+        // The buffer is untrusted because the shell rewrote the visible line (e.g. Tab
+        // completion). Recover the full command from the visible line using the
+        // pre-rewrite anchor; strict visible-echo verification still applies.
+        if (!before.confident && this.pendingAnchor) {
+            const command = this.rebuildFromVisibleLine(this.pendingAnchor)
+            if (command !== null) {
+                return {
+                    command,
+                    trustworthy: true,
+                    visibleEcho: this.verifyVisibleEcho(command),
+                }
+            }
+        }
+        return null
+    }
+
+    private verifyVisibleEcho (command: string): boolean {
+        try {
+            return this.echoVerifier.matches(
+                this.captureCurrentLogicalLines(command),
+                command,
+            )
+        } catch (error) {
+            this.warn('echo', error)
+            return false
+        }
+    }
+
+    private clearPendingAnchor (): void {
+        this.pendingAnchor = null
     }
 
     private captureCurrentLogicalLines (command: string): string[] | null {
@@ -550,6 +599,39 @@ export class CommandHistoryController {
             end = logical.start - 1
         }
         return result
+    }
+
+    /**
+     * Recovers the submitted command from the visible line after an unobservable
+     * rewrite (Tab completion, shell history, unknown control sequences). The
+     * pre-rewrite buffer text anchors the command inside the prompt-prefixed line:
+     * shell completion extends the anchor, so the command is the suffix starting at
+     * the anchor's last occurrence. Returns null when the line cannot be trusted (no
+     * frontend, alternate screen, multiline, anchor absent, or unsafe bytes), in which
+     * case the caller keeps the submission unrecorded.
+     */
+    private rebuildFromVisibleLine (anchor: string): string | null {
+        if (!anchor || this.alternateActive || !this.frontendAvailable || this.destroyed) {
+            return null
+        }
+        try {
+            const lines = this.captureCurrentLogicalLines(anchor)
+            if (!lines?.length) {
+                return null
+            }
+            const line = lines[lines.length - 1]
+            const index = line.lastIndexOf(anchor)
+            if (index < 0) {
+                return null
+            }
+            const rebuilt = line.slice(index)
+            if (!rebuilt || /[\u0000-\u001f\u007f-\u009f]/u.test(rebuilt)) {
+                return null
+            }
+            return rebuilt
+        } catch {
+            return null
+        }
     }
 
     private renderPredictions (): void {

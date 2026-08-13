@@ -97,10 +97,12 @@ describe('CommandBuffer', () => {
         expect(buffer.snapshot()).toMatchObject({ text: 'git ', cursor: 4 })
     })
 
-    test('unknown input loses confidence until Enter', () => {
+    test('unknown input clears stale text and loses confidence until Enter', () => {
         const buffer = new CommandBuffer()
         buffer.apply({ type: 'insert', text: 'git' })
         buffer.apply({ type: 'unknown' })
+        // The shell may have rewritten the line; the cache must not keep diverging text.
+        expect(buffer.snapshot()).toEqual({ text: '', cursor: 0, confident: false, dismissed: false })
         buffer.apply({ type: 'insert', text: ' status' })
         expect(buffer.snapshot().confident).toBe(false)
         expect(buffer.apply({ type: 'enter' })).toEqual({ submitted: null })

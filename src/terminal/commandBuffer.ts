@@ -71,6 +71,11 @@ export class CommandBuffer {
                 this.deleteWord()
                 return {}
             case 'unknown':
+                // The shell may have rewritten the visible line (Tab completion, shell
+                // history, unobservable control sequences). Retaining the old text would
+                // diverge from the actual line, so clear it and stay untrusted until a
+                // trusted rebuild or a reset (Enter / Ctrl+C / alternate screen).
+                this.reset()
                 this.confident = false
                 return {}
             case 'enter': {

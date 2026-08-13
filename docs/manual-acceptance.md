@@ -10,7 +10,7 @@
 | 操作系统 | Microsoft Windows 10.0.26200，x64 |
 | Node.js | v22.14.0 |
 | 验收对象 | 当前 release candidate 源码（含最终审计修复） |
-| 自动化基线 | 18 suites / 305 tests；4096 entries query p95 0.204 ms |
+| 自动化基线 | 18 suites / 312 tests；4096 entries query p95 0.204 ms |
 
 状态含义：
 
@@ -40,7 +40,7 @@ Task 12 的首次隔离启动曾真实暴露 `Cannot load package info for tabby
 | PowerShell | ENVIRONMENT UNAVAILABLE | controller、strict echo、持久化和 fail-open 集成测试覆盖通用终端路径；本机有 PowerShell 7.6.3。 | 在隔离 profile 中提交一个非敏感命令，重新输入前缀，确认 B 列表出现；Right 只填入、不执行；重启 Tabby 后仍可预测。 |
 | cmd.exe | ENVIRONMENT UNAVAILABLE | 与 PowerShell 共用不依赖 Shell hook 的 controller/middleware 测试路径；本机有 `cmd.exe`。 | 创建 cmd profile，提交非敏感命令；验证前缀预测、只采纳不执行和重启持久化。 |
 | WSL Bash | ENVIRONMENT UNAVAILABLE | 通用捕获及 connection identity 有自动测试；本机 `wsl -l -q` 只有 `docker-desktop`，没有用于人工验收的用户发行版。 | 在有用户 WSL 发行版的机器创建 Bash profile，重复 PowerShell 的提交、预测、采纳和重启检查。 |
-| 本地 Bash / Zsh | ENVIRONMENT UNAVAILABLE | Unicode、paste、未知控制序列和通用终端集成测试覆盖协议行为；本机有 Git Bash，但没有 Zsh，且禁止自动输入 Git Bash。 | 在 Git Bash 及可用的 macOS/Linux Zsh 中各提交命令，验证预测；再触发 Shell 原生补全，确认预测隐藏且该不可信 buffer 不保存。 |
+| 本地 Bash / Zsh | ENVIRONMENT UNAVAILABLE | Unicode、paste、未知控制序列、Tab 补全后锚点恢复和通用终端集成测试覆盖协议行为；本机有 Git Bash，但没有 Zsh，且禁止自动输入 Git Bash。 | 在 Git Bash 及可用的 macOS/Linux Zsh 中各提交命令，验证预测；触发 Shell 原生补全（例如 `systemctl stat` + Tab）后继续输入并 Enter，确认预测暂时隐藏、缓存不再携带过期文本，且完整命令仍被记录并可在下次输入前缀时提示。 |
 | 保存的 SSH profile | ENVIRONMENT UNAVAILABLE | identity 测试覆盖保存 profile 的 type + ID；隔离测试覆盖 key 仓储边界；本次没有安全的 SSH target。 | 连接测试主机，提交非敏感命令；重连同一保存 profile 后应出现历史，其他 profile 不应出现。 |
 | SSH Quick Connect | ENVIRONMENT UNAVAILABLE | identity 测试覆盖规范化 user/host/effective port 和敏感字段清理；本次没有安全的 SSH target。 | 两次 Quick Connect 同一 user/host/port，验证共享；改变 user、host 或 port，验证隔离。 |
 | split pane | ENVIRONMENT UNAVAILABLE | decorator/controller 测试覆盖多终端 attach/detach，settings 测试覆盖 split 中 focused terminal。 | 分屏两个终端；分别输入并预测，确认 overlay 定位到各自 viewport，设置页清空作用于最后聚焦 pane。 |

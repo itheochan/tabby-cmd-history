@@ -39,7 +39,7 @@
 | 上一条 / 下一条 | Up / Down |
 | 采纳 / 关闭 | Right / Escape |
 
-导航和采纳按键可以改为设置页列出的 Arrow 或 Ctrl+Arrow 组合。插件拒绝普通可打印字符和 `Ctrl+C` 作为绑定。只有存在活动候选时，导航、采纳和关闭按键才由插件消费；没有候选时原始字节仍交给 Shell。Tab 始终交给 Shell，并让通用重建 buffer 进入不可信状态。
+导航和采纳按键可以改为设置页列出的 Arrow 或 Ctrl+Arrow 组合。插件拒绝普通可打印字符和 `Ctrl+C` 作为绑定。只有存在活动候选时，导航、采纳和关闭按键才由插件消费；没有候选时原始字节仍交给 Shell。Tab 始终交给 Shell；插件随后清空自己的重建 buffer 以丢弃可能已过期的文本，并按 Enter 时从可见行恢复完整命令。
 
 `Ctrl+C` 是不可配置的安全边界：
 
@@ -56,7 +56,7 @@
 
 - bracketed paste 的多行内容可作为一次编辑；只有终端报告支持 bracketed paste 时，多行历史才参与预测和安全采纳。
 - 通用模式不能可靠识别所有 Shell 续行提示。逐次 Enter 的续行可能被学习成多条提交，而不是最终 Shell 命令。
-- Shell 原生补全、未知控制序列或插件无法观察的命令行重写会把 buffer 标为不可信；随后隐藏预测且不保存该 buffer，直到 Enter 或 `Ctrl+C` 重置。
+- Shell 原生补全、未知控制序列或插件无法观察的命令行重写会立即使 buffer 清空并进入不可信状态：不展示预测，也不再把过期文本当作当前命令。按 Enter 时，插件尝试用重写前的文本作为锚点从可见行恢复完整命令（例如 `systemctl stat` 被补全为 `systemctl status`），恢复结果仍必须通过严格可见回显检查才会记录；无法恢复时不记录该 buffer，直到 Enter 或 `Ctrl+C` 重置。
 - alternate screen（例如 Vim、less、top）期间完全禁用捕获和预测，所有输入直接透传；回到 normal screen 后从空 buffer 重新开始。
 - 未来可通过 `CommandCaptureAdapter` 接入 Shell 专用最终命令边界；`0.1.0` 不安装或注入任何 Shell hook。
 
