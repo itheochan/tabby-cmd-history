@@ -162,13 +162,15 @@ export class CommandHistorySettingsTabComponent {
     }
 
     private currentConfig (): CommandHistoryConfig {
-        const configured = this.config.store?.cmdHistory as Partial<CommandHistoryConfig> | undefined
+        // JSON round-trip drops ConfigProxy internal methods (__getValue/__setValue/__getDefault)
+        // that would otherwise leak into the draft and fail validation on save.
+        const configured = JSON.parse(JSON.stringify(this.config.store?.cmdHistory ?? {})) as Partial<CommandHistoryConfig>
         return {
             ...cloneConfig(DEFAULT_COMMAND_HISTORY_CONFIG),
             ...configured,
-            weights: { ...DEFAULT_COMMAND_HISTORY_CONFIG.weights, ...configured?.weights },
-            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, ...configured?.bindings },
-            exclusionPatterns: [...(configured?.exclusionPatterns ?? DEFAULT_COMMAND_HISTORY_CONFIG.exclusionPatterns)],
+            weights: { ...DEFAULT_COMMAND_HISTORY_CONFIG.weights, ...configured.weights },
+            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, ...configured.bindings },
+            exclusionPatterns: [...(configured.exclusionPatterns ?? DEFAULT_COMMAND_HISTORY_CONFIG.exclusionPatterns)],
         }
     }
 

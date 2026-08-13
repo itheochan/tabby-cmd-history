@@ -377,7 +377,7 @@ export class CommandHistoryController {
 
     private readConfig (fallback: CommandHistoryConfig): CommandHistoryConfig {
         try {
-            const configured = this.dependencies.getConfig()
+            const configured = cleanStoredConfig(this.dependencies.getConfig())
             return validateHistoryConfig({
                 ...cloneConfig(DEFAULT_COMMAND_HISTORY_CONFIG),
                 ...configured,
@@ -385,8 +385,8 @@ export class CommandHistoryController {
                 bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, ...configured.bindings },
                 exclusionPatterns: [...configured.exclusionPatterns],
             })
-        } catch {
-            this.warn('config')
+        } catch (error) {
+            this.warn('config', error)
             return cloneConfig(fallback)
         }
     }
@@ -427,10 +427,10 @@ export class CommandHistoryController {
                 this.expanded = config.presentation === 'list'
                 this.renderPredictions()
             })
-            .catch(() => {
+            .catch((error: unknown) => {
                 if (generation === this.queryGeneration) {
                     this.invalidatePredictions()
-                    this.warn('query')
+                    this.warn('query', error)
                 }
             })
     }
@@ -499,8 +499,8 @@ export class CommandHistoryController {
                     this.captureCurrentLogicalLines(before.text),
                     before.text,
                 )
-            } catch {
-                this.warn('echo')
+            } catch (error) {
+                this.warn('echo', error)
             }
         }
         const result = this.buffer.apply({ type: 'enter' })
@@ -540,7 +540,9 @@ export class CommandHistoryController {
         let end = active.baseY + active.cursorY
         const result: string[] = []
         for (let index = 0; index < count; index++) {
-            const logical = readLogicalLine(active.getLine, end)
+            // xterm's getLine is a prototype method that reads `this`; passing it unbound
+            // would throw on the first call, so wrap it with a receiver-preserving closure.
+            const logical = readLogicalLine(lineIndex => active.getLine(lineIndex), end)
             if (!logical) {
                 return null
             }
@@ -676,9 +678,10 @@ export class CommandHistoryController {
         return this.dependencies.now?.() ?? new Date()
     }
 
-    private warn (stage: string): void {
+    private warn (stage: string, error?: unknown): void {
         try {
-            this.dependencies.logger.warn(`cmd-history stage=${stage} key=${this.identity?.key ?? 'unresolved'}`)
+            const detail = describeError(error)
+            this.dependencies.logger.warn(`cmd-history stage=${stage} key=${this.identity?.key ?? 'unresolved'}${detail}`)
         } catch {
             // Diagnostics must never interrupt terminal input.
         }
@@ -718,6 +721,25 @@ function keyFor (action: TerminalInputAction): HistoryKeyName | null {
         case 'ctrlRight': return 'Ctrl+ArrowRight'
         default: return null
     }
+}
+
+function describeError (error: unknown): string {
+    // Only the error class name is safe to log: messages from repository or
+    // matcher faults can embed command text, profile/host details, or paths.
+    if (error === undefined) {
+        return ''
+    }
+    if (error instanceof Error) {
+        return ` err=${error.name}`
+    }
+    return ` err=[non-error:${typeof error}]`
+}
+
+function cleanStoredConfig (config: CommandHistoryConfig): CommandHistoryConfig {
+    // Tabby's ConfigService exposes stored values through a ConfigProxy whose internal
+    // methods (__getValue/__setValue/__getDefault) are enumerable own properties. A JSON
+    // round-trip drops functions and produces a plain object without leaking proxy internals.
+    return JSON.parse(JSON.stringify(config))
 }
 
 function isShellManagedKey (action: TerminalInputAction): boolean {

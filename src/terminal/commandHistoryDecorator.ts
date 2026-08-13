@@ -57,11 +57,12 @@ export class CommandHistoryTerminalDecorator extends TerminalDecorator {
             controller = this.createController(terminal, this.dependencies)
             this.controllers.set(terminal, controller)
             controller.attach()
-        } catch {
+        } catch (error) {
             this.controllers.delete(terminal)
             controller?.destroy()
             try {
-                this.dependencies.logger.warn('cmd-history stage=decorator-attach key=unresolved')
+                const detail = error instanceof Error ? ` err=${error.name}` : ''
+                this.dependencies.logger.warn(`cmd-history stage=decorator-attach key=unresolved${detail}`)
             } catch {
                 // Diagnostics must never interrupt terminal creation.
             }

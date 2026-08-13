@@ -369,6 +369,69 @@ describe('CommandHistoryController', () => {
         expect(fixture.controller.state().buffer.text).toBe('')
     })
 
+    test('captures logical rows when the xterm getLine method requires its receiver', async () => {
+        const fixture = createFixture()
+        const lines = [
+            { isWrapped: false, translateToString: () => 'PS> echo vis' },
+            { isWrapped: true, translateToString: () => 'ible' },
+        ]
+        const active = {
+            cursorX: 0,
+            cursorY: 1,
+            baseY: 0,
+            lines,
+            getLine (index: number) {
+                // xterm's BufferApiView.getLine reads `this._buffer`; the fake enforces the same contract.
+                return (this as typeof active).lines[index]
+            },
+        }
+        fixture.terminal.frontend!.xterm.buffer.active = active as never
+        fixture.terminal.send('echo visible')
+        fixture.terminal.send(Buffer.from([0x0d]))
+        await settle()
+        expect(fixture.bytes()).toEqual(Buffer.from('echo visible\r'))
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.objectContaining({ key: 'a'.repeat(64) }),
+            'echo visible',
+            { trustworthy: true, visibleEcho: true },
+            expect.any(Object),
+            expect.any(Date),
+        )
+        expect(fixture.controller.state().buffer.text).toBe('')
+    })
+
+    test('readConfig tolerates ConfigProxy internal members in stored values', async () => {
+        const stored = {
+            ...config(),
+            presentation: 'inline',
+            maxVisible: 3,
+            weights: {
+                ...config().weights,
+                recency: 0.9,
+                frequency: 0.05,
+                matchCloseness: 0.05,
+                __getValue: () => undefined,
+                __setValue: () => undefined,
+                __getDefault: () => undefined,
+            },
+            bindings: {
+                ...config().bindings,
+                previous: 'Ctrl+ArrowUp',
+                __getValue: () => undefined,
+                __setValue: () => undefined,
+                __getDefault: () => undefined,
+            },
+        }
+        const fixture = createFixture([], { getConfig: () => stored as unknown as CommandHistoryConfig })
+        const state = fixture.controller.state()
+        expect(state.config.presentation).toBe('inline')
+        expect(state.config.maxVisible).toBe(3)
+        expect(state.config.weights.recency).toBe(0.9)
+        expect(state.config.bindings.previous).toBe('Ctrl+ArrowUp')
+        expect(Object.values(state.config.bindings).some(value => typeof value === 'function')).toBe(false)
+        expect(Object.values(state.config.weights).some(value => typeof value === 'function')).toBe(false)
+    })
+
     test('Ctrl+C cancels an Enter record that has not started', async () => {
         const fixture = createFixture()
         fixture.terminal.frontend!.lines = [
