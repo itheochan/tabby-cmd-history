@@ -363,6 +363,75 @@ describe('CommandHistoryController', () => {
         expect(fixture.controller.state().predictions).toEqual([])
     })
 
+    test('rebuilds the buffer and resumes predictions once the Tab completion arrives', async () => {
+        const fixture = createFixture(['systemctl status mysvc.service', 'systemctl restart'])
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemc' },
+        ]
+        fixture.terminal.send('systemc')
+        await settle()
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual([
+            'systemctl status mysvc.service',
+            'systemctl restart',
+        ])
+
+        fixture.terminal.send(Buffer.from([0x09]))
+        expect(fixture.controller.state().buffer.confident).toBe(false)
+        expect(fixture.controller.state().predictions).toEqual([])
+
+        // The shell's completion output rewrites the visible line and updates content.
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl' },
+        ]
+        fixture.terminal.frontend!.contentUpdated$.next()
+        await settle()
+        expect(fixture.controller.state().buffer).toMatchObject({ text: 'systemctl', confident: true })
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual([
+            'systemctl status mysvc.service',
+            'systemctl restart',
+        ])
+    })
+
+    test('re-trusts the buffer and resumes predictions after a no-output Tab via the settle timer', async () => {
+        jest.useFakeTimers()
+        const fixture = createFixture(['systemctl status'])
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemc' },
+        ]
+        fixture.terminal.send('systemc')
+        await settle()
+        fixture.terminal.send(Buffer.from([0x09]))
+        expect(fixture.controller.state().buffer.confident).toBe(false)
+
+        jest.advanceTimersByTime(300)
+        await settle()
+        expect(fixture.controller.state().buffer).toMatchObject({ text: 'systemc', confident: true })
+        expect(fixture.controller.state().predictions.map(item => item.command)).toEqual(['systemctl status'])
+    })
+
+    test('re-syncs the buffer when the completion arrives after an early rebuild', async () => {
+        const fixture = createFixture(['systemctl status'])
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemc' },
+        ]
+        fixture.terminal.send('systemc')
+        await settle()
+        fixture.terminal.send(Buffer.from([0x09]))
+
+        // First content update still shows the pre-completion line (slow shell).
+        fixture.terminal.frontend!.contentUpdated$.next()
+        await settle()
+        expect(fixture.controller.state().buffer).toMatchObject({ text: 'systemc', confident: true })
+
+        // The completion output arrives later and rewrites the line.
+        fixture.terminal.frontend!.lines = [
+            { isWrapped: false, translateToString: () => 'user@host:~$ systemctl' },
+        ]
+        fixture.terminal.frontend!.contentUpdated$.next()
+        await settle()
+        expect(fixture.controller.state().buffer).toMatchObject({ text: 'systemctl', confident: true })
+    })
+
     test('recovers and records a Tab-completed command continued by typing', async () => {
         const fixture = createFixture()
         fixture.terminal.frontend!.lines = [

@@ -34,6 +34,14 @@ export interface ControllerHistoryService {
     ) => Promise<void>
 }
 
+/**
+ * Fallback delay before rebuilding the buffer from the visible line after an
+ * unobservable rewrite (Tab completion / shell-managed keys). The primary trigger is
+ * the frontend content update emitted when the shell's output arrives; this timer only
+ * covers shells that emit no output at all (for example a no-op Tab).
+ */
+const REBUILD_SETTLE_MS = 300
+
 export interface CommandHistoryControllerDependencies {
     history: ControllerHistoryService
     identityResolver: Pick<ConnectionIdentityResolver, 'resolve'>
@@ -110,6 +118,7 @@ export class CommandHistoryController {
     private queryGeneration = 0
     private recordEpoch = 0
     private pendingAnchor: string | null = null
+    private rebuildTimer: ReturnType<typeof setTimeout> | null = null
     private attached = false
     private destroyed = false
 
@@ -210,10 +219,13 @@ export class CommandHistoryController {
             const before = this.buffer.snapshot()
             // The shell may have rewritten the visible line (Tab completion, shell
             // history, unknown control sequences). Remember the trusted text as an
-            // anchor so submit() can recover the full command from the visible line,
-            // then clear the buffer to avoid diverging stale text.
+            // anchor so the buffer can be rebuilt from the visible line once the
+            // shell's output arrives (or via a settle timer), and so submit() can
+            // recover the full command; then clear the buffer to avoid diverging
+            // stale text.
             if (before.confident && before.text) {
                 this.pendingAnchor = before.text
+                this.armRebuildTimer()
             }
             this.buffer.apply({ type: 'unknown' })
             this.invalidatePredictions()
@@ -323,7 +335,7 @@ export class CommandHistoryController {
             this.subscribeFrontend(this.terminal.resize$, () => this.refreshPosition())
             this.subscribeFrontend(this.terminal.alternateScreenActive$, active => this.setAlternate(active))
             if (frontend.contentUpdated$) {
-                this.subscribeFrontend(frontend.contentUpdated$, () => this.refreshPosition())
+                this.subscribeFrontend(frontend.contentUpdated$, () => this.handleContentUpdated())
             }
             if (frontend.destroyed$) {
                 this.subscribeFrontend(frontend.destroyed$, () => {
@@ -577,6 +589,56 @@ export class CommandHistoryController {
 
     private clearPendingAnchor (): void {
         this.pendingAnchor = null
+        this.clearRebuildTimer()
+    }
+
+    /**
+     * The shell's output has changed the visible line. While an anchor is pending
+     * (after Tab / shell-managed keys), try to rebuild the buffer from the visible
+     * line so predictions and recording resume on the completed command; otherwise
+     * just keep the overlay positioned.
+     */
+    private handleContentUpdated (): void {
+        if (this.pendingAnchor) {
+            this.tryRebuild()
+        } else {
+            this.refreshPosition()
+        }
+    }
+
+    private armRebuildTimer (): void {
+        this.clearRebuildTimer()
+        this.rebuildTimer = setTimeout(() => {
+            this.rebuildTimer = null
+            this.tryRebuild()
+        }, REBUILD_SETTLE_MS)
+    }
+
+    private clearRebuildTimer (): void {
+        if (this.rebuildTimer !== null) {
+            clearTimeout(this.rebuildTimer)
+            this.rebuildTimer = null
+        }
+    }
+
+    private tryRebuild (): void {
+        this.clearRebuildTimer()
+        const anchor = this.pendingAnchor
+        if (!anchor || this.alternateActive || !this.frontendAvailable || this.destroyed || !this.config.enabled) {
+            return
+        }
+        const rebuilt = this.rebuildFromVisibleLine(anchor)
+        if (rebuilt === null) {
+            this.refreshPosition()
+            return
+        }
+        const current = this.buffer.snapshot()
+        if (current.confident && current.text === rebuilt) {
+            this.refreshPosition()
+            return
+        }
+        this.buffer.adopt(rebuilt)
+        this.queryFromBuffer()
     }
 
     private captureCurrentLogicalLines (command: string): string[] | null {
