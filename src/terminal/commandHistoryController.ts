@@ -208,6 +208,9 @@ export class CommandHistoryController {
         }
 
         if (action.type === 'enter') {
+            if (this.config.bindings.accept === 'Enter' && this.accept()) {
+                return { consume: true, action }
+            }
             this.submit()
             return { consume: false, action }
         }

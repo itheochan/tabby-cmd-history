@@ -737,6 +737,47 @@ describe('CommandHistoryController', () => {
         expect(fixture.bytes().toString()).toBe('git two')
     })
 
+    test('accept bound to Enter fills the candidate without executing, then Enter submits', async () => {
+        const fixture = createFixture(['git checkout main', 'git cherry-pick a'])
+        fixture.changeConfig({ bindings: { ...config().bindings, accept: 'Enter' } })
+        fixture.terminal.send('git ch')
+        await settle()
+
+        fixture.terminal.send('\r')
+        expect(fixture.bytes().toString()).toBe('git checkout main')
+        expect(fixture.bytes().includes(0x0d)).toBe(false)
+        expect(fixture.controller.state()).toMatchObject({
+            buffer: { text: 'git checkout main', confident: true },
+            predictions: [],
+        })
+
+        fixture.terminal.send('\r')
+        expect(fixture.bytes().subarray(-1)).toEqual(Buffer.from([0x0d]))
+        await settle()
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.anything(),
+            'git checkout main',
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+        )
+    })
+
+    test('accept bound to Enter submits normally when no candidate exists', async () => {
+        const fixture = createFixture()
+        fixture.changeConfig({ bindings: { ...config().bindings, accept: 'Enter' } })
+        fixture.terminal.send('pwd\r')
+        expect(fixture.bytes().toString()).toBe('pwd\r')
+        await settle()
+        expect(fixture.history.record).toHaveBeenCalledWith(
+            expect.anything(),
+            'pwd',
+            expect.anything(),
+            expect.anything(),
+            expect.anything(),
+        )
+    })
+
     test('filters multiline candidates unless bracketed paste is supported', async () => {
         const fixture = createFixture(['echo one\necho two', 'echo safe'])
         fixture.terminal.frontend!.bracketedPaste = false
