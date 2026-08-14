@@ -8,7 +8,7 @@
 
 - 记录用户在终端中提交过、且通过捕获安全检查的命令。
 - 首次访问 persistent key 时，插件异步把该 connection 的隔离 JSONL 加载到进程内共享索引；后续匹配和排序面向该内存索引。收到仓储 mutation 通知时会异步刷新对应 key 的内存快照。
-- Up/Down 选择候选，Right 只把候选填入当前命令行，绝不附加 Enter 或自动执行。
+- Up/Down 选择候选，Right（或在设置中把「采纳」绑定为 Enter）只把候选填入当前命令行，绝不附加 Enter 或自动执行。
 - 每个 connection 独立存储和查询；相同 connection key 的多个 tab 共享历史，不同 key 之间不会互相推荐。
 - 历史以 JSONL 保存在本机当前用户的数据目录，不写入项目目录、Tabby 安装目录或 Tabby 配置文件。
 - 设置页可调整展示、匹配、容量、安全策略、按键和数据目录，并可二次确认后清空当前 connection。
@@ -37,7 +37,7 @@
 | 捕获 | `strict` |
 | 敏感过滤 | 启用 |
 | 上一条 / 下一条 | Up / Down |
-| 采纳 / 关闭 | Right / Escape |
+| 采纳 / 关闭 | Right / Escape（Enter 可选） |
 
 导航和采纳按键可以改为设置页列出的 Arrow 或 Ctrl+Arrow 组合。插件拒绝普通可打印字符和 `Ctrl+C` 作为绑定。只有存在活动候选时，导航、采纳和关闭按键才由插件消费；没有候选时原始字节仍交给 Shell。Tab 始终交给 Shell；插件随后清空自己的重建 buffer 以丢弃可能已过期的文本，并在 Shell 补全输出到达后从可见行重建 buffer、恢复预测。
 

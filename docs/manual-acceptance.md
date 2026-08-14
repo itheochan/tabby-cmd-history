@@ -50,7 +50,7 @@ Task 12 的首次隔离启动曾真实暴露 `Cannot load package info for tabby
 | alternate screen | ENVIRONMENT UNAVAILABLE | buffer/controller tests 覆盖进入时清空并 raw pass-through、退出后空且可信。 | 运行 Vim/less/top；输入与导航不得出现预测或历史拦截；退出后从空 buffer 开始。 |
 | multiline bracketed paste | ENVIRONMENT UNAVAILABLE | decoder/middleware/controller tests 覆盖跨 chunk paste、多行过滤、bracketed safe replace 且无终止符。 | 启用 bracketed paste 的 Shell 中粘贴多行非破坏性文本，确认作为一次编辑；采纳多行候选不得执行。 |
 | A / B / C 展示 | ENVIRONMENT UNAVAILABLE | overlay reducer/controller tests 覆盖 inline、list、hybrid 展开、选择和关闭；默认配置测试断言 B/list。 | 逐一切换 `inline`、`list`、`hybrid`，输入相同前缀，按各模式描述核对 ghost/list、Down 展开和 Escape 关闭。 |
-| runtime config | ENVIRONMENT UNAVAILABLE | controller test 覆盖 mode、max results 和 bindings 无重启更新；settings tests 覆盖保存、归一化和错误回滚。 | 终端保持打开时修改模式、候选数和绑定，保存后立即输入；除数据目录外均应即时生效。数据目录需重启。 |
+| runtime config | ENVIRONMENT UNAVAILABLE | controller test 覆盖 mode、max results 和 bindings 无重启更新；settings tests 覆盖保存、归一化和错误回滚。 | 终端保持打开时修改模式、候选数和绑定，保存后立即输入；除数据目录外均应即时生效。数据目录需重启。将「采纳」绑定设为 Enter 后，有候选时按 Enter 只填入不执行，再按 Enter 提交。 |
 | `Ctrl+C`（有候选/编辑中） | ENVIRONMENT UNAVAILABLE | controller、buffer、middleware tests 覆盖精确透传、同步清空候选/buffer，以及进行中的 bracketed paste。 | 输入到候选出现后按 `Ctrl+C`；Shell 应收到中断字节，候选和 buffer 立即清空，再输入不应恢复旧候选状态。 |
 | `Ctrl+C`（无候选/进程运行中） | ENVIRONMENT UNAVAILABLE | fail-open integration 覆盖 matcher/repository 异常下 `Ctrl+C` 仍精确透传。 | 运行可安全中断的长任务，确认 `Ctrl+C` 行为与未装插件一致；随后新输入从空 buffer 开始。 |
 | unwritable data directory | ENVIRONMENT UNAVAILABLE | repository tests 用物理/注入失败覆盖 read/append 降级、每阶段一次脱敏 warning、当前进程隔离内存历史和 clear 错误可见。 | 在一次性测试账号/目录中制造不可写条件，不要改真实历史；确认终端输入不受阻、仅本 connection 保留进程内历史，clear 显示失败。 |
