@@ -63,7 +63,7 @@
             .form-group('*ngFor'='let binding of [{ key: "previous", label: "Previous candidate" }, { key: "next", label: "Next candidate" }, { key: "accept", label: "Accept candidate" }, { key: "dismiss", label: "Dismiss candidates" }]')
                 label('[for]'='"cmd-history-binding-" + binding.key') {{ binding.label }}
                 select.form-control('[id]'='"cmd-history-binding-" + binding.key' '[(ngModel)]'='draft.bindings[binding.key]')
-                    option('*ngFor'='let key of bindingOptions' '[ngValue]'='key') {{ key }}
+                    option('*ngFor'='let key of bindingOptionsFor(binding.key)' '[ngValue]'='key') {{ key }}
 
     .form-group
         label(for='cmd-history-data-root') Custom data directory (optional)

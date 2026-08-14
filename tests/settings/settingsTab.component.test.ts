@@ -161,6 +161,25 @@ describe('CommandHistorySettingsTabComponent', () => {
         expect(fixture.component.validationError).toBe('')
     })
 
+    test('offers Enter only for the accept binding', () => {
+        const fixture = createSettingsFixture()
+        expect(fixture.component.bindingOptionsFor('accept')).toContain('Enter')
+        expect(fixture.component.bindingOptionsFor('previous')).not.toContain('Enter')
+        expect(fixture.component.bindingOptionsFor('next')).not.toContain('Enter')
+        expect(fixture.component.bindingOptionsFor('dismiss')).not.toContain('Enter')
+    })
+
+    test('saves Enter as the accept binding', async () => {
+        const fixture = createSettingsFixture()
+        fixture.component.draft.bindings.accept = 'Enter'
+
+        await fixture.component.save()
+
+        expect(fixture.config.store.cmdHistory.bindings.accept).toBe('Enter')
+        expect(fixture.component.validationError).toBe('')
+        expect(fixture.config.save).toHaveBeenCalledTimes(1)
+    })
+
     test('saves every leaf in place through a getter-only structural ConfigProxy', async () => {
         const fixture = createSettingsFixture({ structuralConfig: true })
         const root = fixture.config.store.cmdHistory as ReturnType<typeof cloneDefaults>

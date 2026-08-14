@@ -51,6 +51,11 @@ export class CommandHistorySettingsTabComponent {
         'Ctrl+ArrowDown',
         'Ctrl+ArrowRight',
     ]
+    readonly acceptBindingOptions: readonly HistoryKeyName[] = [...this.bindingOptions, 'Enter']
+
+    bindingOptionsFor (key: string): readonly HistoryKeyName[] {
+        return key === 'accept' ? this.acceptBindingOptions : this.bindingOptions
+    }
 
     draft: CommandHistoryConfig
     exclusionText: string
