@@ -20,14 +20,14 @@ import { ActiveTerminalTracker } from '../terminal/activeTerminalTracker'
 
 if (process.env.NODE_ENV !== 'test') {
     // Webpack bundles the settings stylesheet; Jest exercises the component contract without loading Sass.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     require('./settingsTab.component.scss')
 }
 
 const template = process.env.NODE_ENV === 'test'
     ? ''
     // pug-loader returns a render function.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     : require('./settingsTab.component.pug')()
 
 interface ActiveConnection {

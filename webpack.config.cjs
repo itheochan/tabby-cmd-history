@@ -9,7 +9,7 @@ module.exports = {
     module: {
         rules: [
             { test: /\.ts$/, use: 'ts-loader', exclude: /node_modules/ },
-            { test: /\.pug$/, use: 'pug-loader' },
+            { test: /\.pug$/, use: { loader: path.resolve(__dirname, 'scripts', 'pug-loader.cjs') } },
             { test: /\.s[ac]ss$/, use: ['style-loader', 'css-loader', 'sass-loader'] },
         ],
     },

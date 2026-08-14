@@ -3,7 +3,7 @@ import { Prediction } from '../history/types'
 
 if (process.env.NODE_ENV !== 'test') {
     // Webpack bundles the stylesheet; Jest exercises the DOM contract without loading Sass.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
     require('./predictionOverlay.scss')
 }
 

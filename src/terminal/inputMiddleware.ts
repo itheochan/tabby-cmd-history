@@ -12,7 +12,7 @@ export interface ReplacementInput {
     candidate: string
 }
 
-export interface BracketedReplacementInput extends ReplacementInput {}
+export type BracketedReplacementInput = ReplacementInput
 
 export type InputRouter = (action: TerminalInputAction) => InputRouteDecision
 
