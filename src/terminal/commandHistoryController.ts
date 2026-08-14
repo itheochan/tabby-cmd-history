@@ -193,19 +193,16 @@ export class CommandHistoryController {
 
         const key = keyFor(action)
         if (this.predictions.length && key) {
-            if (key === this.config.bindings.previous) {
-                this.previous()
+            if (key === this.config.bindings.previous && this.previous()) {
                 return { consume: true, action }
             }
-            if (key === this.config.bindings.next) {
-                this.next()
+            if (key === this.config.bindings.next && this.next()) {
                 return { consume: true, action }
             }
-            if (key === this.config.bindings.accept) {
-                return { consume: this.accept(), action }
+            if (key === this.config.bindings.accept && this.accept()) {
+                return { consume: true, action }
             }
-            if (key === this.config.bindings.dismiss) {
-                this.dismiss()
+            if (key === this.config.bindings.dismiss && this.dismiss()) {
                 return { consume: true, action }
             }
         }
@@ -453,7 +450,6 @@ export class CommandHistoryController {
                 const supportsMultiline = this.supportsBracketedPaste()
                 this.predictions = predictions
                     .filter(item => supportsMultiline || !/[\r\n]/u.test(item.command))
-                    .filter(item => config.presentation === 'list' || hasInlineRemainder(item, state.text))
                 this.selectedIndex = 0
                 this.expanded = config.presentation === 'list'
                 this.renderPredictions()
@@ -466,32 +462,55 @@ export class CommandHistoryController {
             })
     }
 
-    private previous (): void {
-        this.selectedIndex = (this.selectedIndex - 1 + this.predictions.length) % this.predictions.length
-        this.renderPredictions()
+    private displayedPredictions (): Prediction[] {
+        if (this.config.presentation === 'list' || this.expanded) {
+            return this.predictions
+        }
+        const query = this.buffer.snapshot().text
+        return this.predictions.filter(item => item.matchKind === 'prefix' && hasInlineRemainder(item, query))
     }
 
-    private next (): void {
+    private previous (): boolean {
+        const displayed = this.displayedPredictions()
+        if (!displayed.length) {
+            return false
+        }
+        this.selectedIndex = (this.selectedIndex - 1 + displayed.length) % displayed.length
+        this.renderPredictions()
+        return true
+    }
+
+    private next (): boolean {
         if (this.config.presentation === 'hybrid' && !this.expanded) {
             this.expanded = true
-        } else {
-            this.selectedIndex = (this.selectedIndex + 1) % this.predictions.length
+            this.renderPredictions()
+            return true
         }
+        const displayed = this.displayedPredictions()
+        if (!displayed.length) {
+            return false
+        }
+        this.selectedIndex = (this.selectedIndex + 1) % displayed.length
         this.renderPredictions()
+        return true
     }
 
-    private dismiss (): void {
+    private dismiss (): boolean {
         if (this.config.presentation === 'hybrid' && this.expanded) {
             this.expanded = false
             this.renderPredictions()
-            return
+            return true
+        }
+        if (!this.displayedPredictions().length) {
+            return false
         }
         this.buffer.dismiss()
         this.invalidatePredictions()
+        return true
     }
 
     private accept (): boolean {
-        const candidate = this.predictions[this.selectedIndex]?.command
+        const candidate = this.displayedPredictions()[this.selectedIndex]?.command
         const middleware = this.middleware
         if (!candidate || !middleware) {
             return false
@@ -697,10 +716,12 @@ export class CommandHistoryController {
     }
 
     private renderPredictions (): void {
-        if (!this.predictions.length || !this.overlay) {
-            this.predictions = []
+        const displayed = this.displayedPredictions()
+        if (!displayed.length || !this.overlay) {
             this.selectedIndex = 0
-            this.expanded = false
+            if (!this.predictions.length) {
+                this.expanded = false
+            }
             this.hideOverlay()
             return
         }
@@ -731,7 +752,7 @@ export class CommandHistoryController {
             this.overlay.render({
                 mode: this.config.presentation,
                 query: this.buffer.snapshot().text,
-                predictions: this.predictions,
+                predictions: displayed,
                 selectedIndex: this.selectedIndex,
                 expanded: this.expanded,
                 maxResults: this.config.maxVisible,

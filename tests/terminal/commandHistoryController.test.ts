@@ -909,4 +909,60 @@ describe('CommandHistoryController', () => {
         expect(fixture.logs.join('\n')).toContain('geometry-measure')
         expect(fixture.logs.join('\n')).not.toContain('safe command')
     })
+
+    test('inline mode navigation skips contains matches', async () => {
+        const history = {
+            query: jest.fn(async () => [
+                { ...prediction('git status'), matchKind: 'prefix' as const, matchIndex: 0 },
+                { ...prediction('sudo git checkout'), matchKind: 'contains' as const, matchIndex: 5 },
+            ]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.changeConfig({ presentation: 'inline' })
+        fixture.terminal.send('git')
+        await settle()
+
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-ghost')?.textContent).toBe(' status')
+
+        fixture.terminal.send('\x1b[B')
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-ghost')?.textContent).toBe(' status')
+    })
+
+    test('hybrid expanded list includes exact and contains matches', async () => {
+        const history = {
+            query: jest.fn(async () => [
+                { ...prediction('git'), matchKind: 'prefix' as const, matchIndex: 0 },
+                { ...prediction('sudo git status'), matchKind: 'contains' as const, matchIndex: 5 },
+            ]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.changeConfig({ presentation: 'hybrid' })
+        fixture.terminal.send('git')
+        await settle()
+
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-ghost')).toBeNull()
+
+        fixture.terminal.send('\x1b[B')
+        const options = Array.from(fixture.terminal.element.nativeElement.querySelectorAll('[role="option"]'))
+        expect(options.map(option => option.textContent)).toEqual(['git', 'sudo git status'])
+    })
+
+    test('inline mode forwards navigation keys when no prefix candidate is visible', async () => {
+        const history = {
+            query: jest.fn(async () => [
+                { ...prediction('sudo git checkout'), matchKind: 'contains' as const, matchIndex: 5 },
+            ]),
+            record: jest.fn(async () => undefined),
+        }
+        const fixture = createFixture([], { history })
+        fixture.changeConfig({ presentation: 'inline' })
+        fixture.terminal.send('git')
+        await settle()
+
+        expect(fixture.terminal.element.nativeElement.querySelector('.cmd-history-ghost')).toBeNull()
+        fixture.terminal.send('\x1b[B')
+        expect(fixture.bytes()).toEqual(Buffer.from('git\x1b[B'))
+    })
 })
