@@ -1,6 +1,6 @@
 export type PresentationMode = 'inline' | 'list' | 'hybrid'
 export type CaptureMode = 'strict' | 'permissive'
-export type HistoryKeyName = 'ArrowUp' | 'ArrowDown' | 'ArrowRight' | 'Escape' |
+export type HistoryKeyName = 'ArrowUp' | 'ArrowDown' | 'ArrowRight' | 'Escape' | 'Enter' |
     'Ctrl+ArrowUp' | 'Ctrl+ArrowDown' | 'Ctrl+ArrowRight'
 
 export interface CommandHistoryConfig {
@@ -74,13 +74,17 @@ function validateLimit (name: string, value: number, minimum: number, maximum: n
 
 function validateBindings (bindings: CommandHistoryConfig['bindings']): void {
     const allowed = new Set<HistoryKeyName>([
-        'ArrowUp', 'ArrowDown', 'ArrowRight', 'Escape',
+        'ArrowUp', 'ArrowDown', 'ArrowRight', 'Escape', 'Enter',
         'Ctrl+ArrowUp', 'Ctrl+ArrowDown', 'Ctrl+ArrowRight',
     ])
-    for (const binding of Object.values(bindings)) {
+    const entries = Object.entries(bindings) as Array<[keyof CommandHistoryConfig['bindings'], HistoryKeyName]>
+    for (const [name, binding] of entries) {
         const bindingName: string = binding
         if (bindingName === 'Ctrl+C') {
             throw new Error('Ctrl+C cannot be used as a command history binding')
+        }
+        if (binding === 'Enter' && name !== 'accept') {
+            throw new Error('Command history binding Enter can only be used for accept')
         }
         if (isPrintableCharacter(bindingName)) {
             throw new Error(`Printable character cannot be used as a command history binding: ${bindingName}`)

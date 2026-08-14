@@ -49,4 +49,15 @@ describe('command history defaults', () => {
             bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, accept: 'a' as never },
         })).toThrow('Printable character')
     })
+
+    test('accepts Enter as the accept binding and rejects it elsewhere', () => {
+        expect(() => validateHistoryConfig({
+            ...DEFAULT_COMMAND_HISTORY_CONFIG,
+            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, accept: 'Enter' },
+        })).not.toThrow()
+        expect(() => validateHistoryConfig({
+            ...DEFAULT_COMMAND_HISTORY_CONFIG,
+            bindings: { ...DEFAULT_COMMAND_HISTORY_CONFIG.bindings, previous: 'Enter' },
+        })).toThrow('Command history binding Enter can only be used for accept')
+    })
 })
