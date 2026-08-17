@@ -2,7 +2,7 @@
 
 `tabby-cmd-history` 是面向 [Tabby](https://github.com/Eugeny/tabby) 桌面端的 connection 隔离命令历史与输入预测插件。它参考 PowerShell [about_History](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_history) 和 [PSReadLine](https://learn.microsoft.com/powershell/module/psreadline/about/about_psreadline) 的历史预测体验，但不依赖 PowerShell，也不会替换 Shell 自己的历史机制。
 
-当前版本是 `0.1.0` 发布候选，尚未发布到 npm。支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
+当前版本是 `0.2.0`，已发布到 npm。支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
 
 ## 功能
 
@@ -58,7 +58,7 @@
 - 通用模式不能可靠识别所有 Shell 续行提示。逐次 Enter 的续行可能被学习成多条提交，而不是最终 Shell 命令。
 - Shell 原生补全、未知控制序列或插件无法观察的命令行重写会立即使 buffer 清空并进入不可信状态：不再把过期文本当作当前命令。Shell 补全的输出到达后，插件用重写前的文本作为锚点从可见行重建 buffer（例如 `systemc` 被补全为 `systemctl`），预测随即恢复；无法重建的行保持隐藏，直到 Enter 或 `Ctrl+C` 重置。按 Enter 时，若重建失败，插件仍会用锚点从可见行恢复完整命令，恢复结果必须通过严格可见回显检查才会记录。
 - alternate screen（例如 Vim、less、top）期间完全禁用捕获和预测，所有输入直接透传；回到 normal screen 后从空 buffer 重新开始。
-- 未来可通过 `CommandCaptureAdapter` 接入 Shell 专用最终命令边界；`0.1.0` 不安装或注入任何 Shell hook。
+- 未来可通过 `CommandCaptureAdapter` 接入 Shell 专用最终命令边界；`0.2.0` 不安装或注入任何 Shell hook。
 
 ## 敏感历史策略
 
@@ -114,11 +114,11 @@ JSONL 在事件数达到容量阈值时压缩；文件超过 2 MiB 时，还必�
 
 ## 安装
 
-### Tabby 插件管理器（npm 发布后）
+### Tabby 插件管理器
 
-此版本尚未发布。发布到 npm 后，可在 Tabby 的 Plugins 页面搜索 `tabby-cmd-history` 并安装；安装后按 Tabby 提示重启。请先核对包名、版本和发布者，不要把本节视为“现已发布”的声明。
+当前版本已发布到 npm。可在 Tabby 的 Plugins 页面搜索 `tabby-cmd-history` 并安装；安装后按 Tabby 提示重启。请先核对包名、版本和发布者。
 
-发布后若需要从 npm 手工安装，可先在 Tabby 的 Plugins 页面选择 **Open Plugins Directory**，在打开的目录中执行 `npm install tabby-cmd-history`，然后重启 Tabby。该命令在包正式发布前不会获得本发布候选；日常安装仍优先使用 Tabby Plugin Manager。
+若需要从 npm 手工安装，可先在 Tabby 的 Plugins 页面选择 **Open Plugins Directory**，在打开的目录中执行 `npm install tabby-cmd-history`，然后重启 Tabby。日常安装仍优先使用 Tabby Plugin Manager。
 
 ### 本地开发加载
 
@@ -160,7 +160,7 @@ npm run verify
 
 ## 界面截图
 
-当前仓库没有经过真实 Tabby 验证的截图，因此不提供生成图或示意图冒充产品截图。后续人工采集的真实截图预留在 `docs/images/`，但该目录不会进入 `0.1.0` npm 包。
+当前仓库没有经过真实 Tabby 验证的截图，因此不提供生成图或示意图冒充产品截图。后续人工采集的真实截图预留在 `docs/images/`，但该目录不会进入 `0.2.0` npm 包。
 
 ## 安全边界摘要
 
