@@ -54,7 +54,7 @@ Task 12 的首次隔离启动曾真实暴露 `Cannot load package info for tabby
 | `Ctrl+C`（有候选/编辑中） | ENVIRONMENT UNAVAILABLE | controller、buffer、middleware tests 覆盖精确透传、同步清空候选/buffer，以及进行中的 bracketed paste。 | 输入到候选出现后按 `Ctrl+C`；Shell 应收到中断字节，候选和 buffer 立即清空，再输入不应恢复旧候选状态。 |
 | `Ctrl+C`（无候选/进程运行中） | ENVIRONMENT UNAVAILABLE | fail-open integration 覆盖 matcher/repository 异常下 `Ctrl+C` 仍精确透传。 | 运行可安全中断的长任务，确认 `Ctrl+C` 行为与未装插件一致；随后新输入从空 buffer 开始。 |
 | unwritable data directory | ENVIRONMENT UNAVAILABLE | repository tests 用物理/注入失败覆盖 read/append 降级、每阶段一次脱敏 warning、当前进程隔离内存历史和 clear 错误可见。 | 在一次性测试账号/目录中制造不可写条件，不要改真实历史；确认终端输入不受阻、仅本 connection 保留进程内历史，clear 显示失败。 |
-| truncated JSONL | ENVIRONMENT UNAVAILABLE | repository tests 覆盖损坏行跳过、有效行继续重放且 load 不自动重写源字节。 | 备份测试 connection 文件，在关闭 Tabby 时截断最后一行；重启后确认其他有效历史可预测且文件未被仅因 load 自动重写。 |
+| truncated JSONL | ENVIRONMENT UNAVAILABLE | repository tests 覆盖损坏行跳过、有效行继续重放；v2 文件 load 不自动重写源字节，v1 文件 load 会去重迁移为 v2。 | 备份测试 connection 文件，在关闭 Tabby 时截断最后一行；重启后确认其他有效历史可预测，且 v2 文件未被仅因 load 自动重写。 |
 
 ## 自动发布门禁
 

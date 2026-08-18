@@ -9,6 +9,7 @@
     "emitDecoratorMetadata": true,
     "useDefineForClassFields": false,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "declaration": true,
     "outDir": "dist",
     "sourceMap": true,
