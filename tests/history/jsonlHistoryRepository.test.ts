@@ -236,22 +236,23 @@ test('migrates legacy v1 duplicates to a single current-format entry', async () 
     ])
 })
 
-test('heals duplicate current-format entries for the same command', async () => {
+test('deduplicates duplicate current-format entries in memory without rewriting the file', async () => {
     const root = await makeRoot()
     const key = '5'.repeat(64)
     const file = join(root, 'connections', `${key}.jsonl`)
-    await mkdir(join(root, 'connections'), { recursive: true })
-    await writeFile(file, [
+    const source = [
         currentEntry('git status', '2026-08-12T10:00:00Z', 2),
         currentEntry('git status', '2026-08-12T11:00:00Z', 3),
         currentEntry('pwd', '2026-08-12T12:00:00Z', 1),
-    ].join('\n'))
+    ].join('\n')
+    await mkdir(join(root, 'connections'), { recursive: true })
+    await writeFile(file, source)
 
     expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual([
         { command: 'pwd', lastUsedAt: '2026-08-12T12:00:00Z', useCount: 1 },
         { command: 'git status', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 5 },
     ])
-    expect(await readRecords(root, key)).toHaveLength(2)
+    expect(await readFile(file, 'utf8')).toBe(source)
 })
 
 test('does not rewrite a current-format corrupt source merely because load skipped lines', async () => {

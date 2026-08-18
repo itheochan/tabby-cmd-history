@@ -80,7 +80,6 @@ type ReplayLineKind = 'use' | 'entry' | 'invalid'
 interface ReplayResult {
     kind: ReplayLineKind
     legacy: boolean
-    duplicate: boolean
 }
 
 export class JsonlHistoryRepository {
@@ -213,7 +212,7 @@ export class JsonlHistoryRepository {
                     this.warnStorageFailure(key, 'replay')
                     continue
                 }
-                if (replayed.legacy || replayed.duplicate) {
+                if (replayed.legacy) {
                     shouldRewrite = true
                 }
             }
@@ -299,34 +298,31 @@ function replayLine (entries: Map<string, HistoryEntry>, line: string): ReplayRe
         if (isLegacyUseEvent(event)) {
             const command = normalizeCommand(event.command)
             if (!command) {
-                return { kind: 'invalid', legacy: false, duplicate: false }
+                return { kind: 'invalid', legacy: false }
             }
-            const duplicate = entries.has(command)
             applyUse(entries, command, event.at)
-            return { kind: 'use', legacy: true, duplicate }
+            return { kind: 'use', legacy: true }
         }
         if (isLegacyEntryEvent(event)) {
             const command = normalizeCommand(event.command)
             if (!command) {
-                return { kind: 'invalid', legacy: false, duplicate: false }
+                return { kind: 'invalid', legacy: false }
             }
-            const duplicate = entries.has(command)
             mergeContribution(entries, command, event.lastUsedAt, event.useCount)
-            return { kind: 'entry', legacy: true, duplicate }
+            return { kind: 'entry', legacy: true }
         }
         if (isEntryEvent(event)) {
             const command = normalizeCommand(event.command)
             if (!command) {
-                return { kind: 'invalid', legacy: false, duplicate: false }
+                return { kind: 'invalid', legacy: false }
             }
-            const duplicate = entries.has(command)
             mergeContribution(entries, command, event.at, event.count)
-            return { kind: 'entry', legacy: false, duplicate }
+            return { kind: 'entry', legacy: false }
         }
     } catch {
         // A damaged line is isolated from the rest of the JSONL file.
     }
-    return { kind: 'invalid', legacy: false, duplicate: false }
+    return { kind: 'invalid', legacy: false }
 }
 
 function applyUse (entries: Map<string, HistoryEntry>, command: string, at: string): void {
