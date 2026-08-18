@@ -2,7 +2,7 @@
 
 `tabby-cmd-history` 是面向 [Tabby](https://github.com/Eugeny/tabby) 桌面端的 connection 隔离命令历史与输入预测插件。它参考 PowerShell [about_History](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_history) 和 [PSReadLine](https://learn.microsoft.com/powershell/module/psreadline/about/about_psreadline) 的历史预测体验，但不依赖 PowerShell，也不会替换 Shell 自己的历史机制。
 
-当前版本是 `0.2.0`，已发布到 npm。支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
+支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
 
 ## 功能
 
@@ -17,27 +17,27 @@
 
 三种模式全部可在设置中切换，默认是 **B（list）**。设置界面中的枚举值如下：
 
-| 模式 | 设置值 | 行为 |
-|---|---|---|
-| A | `inline` | 在当前行显示选中候选的 ghost suffix。 |
-| B（默认） | `list` | 在光标附近显示候选列表，默认最多 5 条。 |
-| C | `hybrid` | 默认显示 inline 预测，按 Down 展开列表。 |
+| 模式      | 设置值     | 行为                                     |
+| --------- | ---------- | ---------------------------------------- |
+| A         | `inline` | 在当前行显示选中候选的 ghost suffix。    |
+| B（默认） | `list`   | 在光标附近显示候选列表，默认最多 5 条。  |
+| C         | `hybrid` | 默认显示 inline 预测，按 Down 展开列表。 |
 
 ## 默认配置和按键
 
-| 项目 | 默认值 |
-|---|---|
-| 插件 | 启用 |
-| 展示 | B / `list` |
-| 最短查询长度 | 1 |
-| 最大可见候选数 | 5 |
-| 匹配大小写 | 不区分 |
-| 每个 connection 唯一命令容量 | 4096 |
-| recency / frequency / matchCloseness | 55% / 30% / 15% |
-| 捕获 | `strict` |
-| 敏感过滤 | 启用 |
-| 上一条 / 下一条 | Up / Down |
-| 采纳 / 关闭 | Right / Escape（Enter 可选） |
+| 项目                                 | 默认值                       |
+| ------------------------------------ | ---------------------------- |
+| 插件                                 | 启用                         |
+| 展示                                 | B /`list`                  |
+| 最短查询长度                         | 1                            |
+| 最大可见候选数                       | 5                            |
+| 匹配大小写                           | 不区分                       |
+| 每个 connection 唯一命令容量         | 4096                         |
+| recency / frequency / matchCloseness | 55% / 30% / 15%              |
+| 捕获                                 | `strict`                   |
+| 敏感过滤                             | 启用                         |
+| 上一条 / 下一条                      | Up / Down                    |
+| 采纳 / 关闭                          | Right / Escape（Enter 可选） |
 
 导航和采纳按键可以改为设置页列出的 Arrow 或 Ctrl+Arrow 组合。插件拒绝普通可打印字符和 `Ctrl+C` 作为绑定。只有存在活动候选时，导航、采纳和关闭按键才由插件消费；没有候选时原始字节仍交给 Shell。Tab 始终交给 Shell；插件随后清空自己的重建 buffer 以丢弃可能已过期的文本，并在 Shell 补全输出到达后从可见行重建 buffer、恢复预测。
 
@@ -86,11 +86,11 @@
 
 默认根目录：
 
-| 平台 | 路径 |
-|---|---|
-| Windows | `%APPDATA%\tabby\cmd-history` |
-| macOS | `~/Library/Application Support/tabby/cmd-history` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history` |
+| 平台    | 路径                                                   |
+| ------- | ------------------------------------------------------ |
+| Windows | `%APPDATA%\tabby\cmd-history`                        |
+| macOS   | `~/Library/Application Support/tabby/cmd-history`    |
+| Linux   | `${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history` |
 
 每个 connection 文件位于 `connections/<sha256>.jsonl`。高级设置中的自定义目录必须是当前用户主目录内的绝对路径；空值恢复默认目录，保存后需重启 Tabby 才会由仓储实例采用。
 
