@@ -8,12 +8,10 @@ import {
 } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { Observable, Subject } from 'rxjs'
+import { version as pluginVersion } from '../../package.json'
 import { HistoryEntry, HistoryRepositoryMutation } from './types'
 
 interface RepositoryOptions {
-    compactBytes?: number
-    compactEvents?: number
-    compactUseEvents?: number
     fileOperations?: Partial<JsonlHistoryFileOperations>
     warn?: (message: string) => void
 }
@@ -35,20 +33,19 @@ export interface JsonlHistoryFileOperations {
 
 interface KeyState {
     entries: Map<string, HistoryEntry>
-    eventCount: number
     fileBytes: number
+    fileLines: number
     storageAvailable: boolean
-    useEventsSinceCompaction: number
 }
 
-interface UseEvent {
+interface LegacyUseEvent {
     v: 1
     kind: 'use'
     command: string
     at: string
 }
 
-interface EntryEvent {
+interface LegacyEntryEvent {
     v: 1
     kind: 'entry'
     command: string
@@ -56,9 +53,15 @@ interface EntryEvent {
     useCount: number
 }
 
+interface EntryEvent {
+    v: string
+    kind: 'entry'
+    command: string
+    at: string
+    count: number
+}
+
 const KEY_PATTERN = /^[a-f0-9]{64}$/u
-const DEFAULT_COMPACT_BYTES = 2 * 1024 * 1024
-const DEFAULT_COMPACT_USE_EVENTS = 512
 const states = new Map<string, KeyState>()
 const queues = new Map<string, Promise<void>>()
 const warnedFailures = new Set<string>()
@@ -71,17 +74,19 @@ const DEFAULT_FILE_OPERATIONS: JsonlHistoryFileOperations = {
     rm: (path, options) => nodeRm(path, options),
 }
 
-type FailureStage = 'read' | 'replay' | 'append' | 'compact' | 'clear'
+type FailureStage = 'read' | 'replay' | 'append' | 'rewrite' | 'migrate' | 'clear'
 type ReplayLineKind = 'use' | 'entry' | 'invalid'
+
+interface ReplayResult {
+    kind: ReplayLineKind
+    legacy: boolean
+}
 
 export class JsonlHistoryRepository {
     readonly updates$: Observable<string>
     readonly mutationUpdates$: Observable<HistoryRepositoryMutation>
 
     private readonly root: string
-    private readonly compactBytes: number
-    private readonly compactEvents?: number
-    private readonly compactUseEvents: number
     private readonly fileOperations: JsonlHistoryFileOperations
     private readonly warn?: (message: string) => void
     private readonly updatesSubject = new Subject<string>()
@@ -89,9 +94,6 @@ export class JsonlHistoryRepository {
 
     constructor (root: string, options: RepositoryOptions = {}) {
         this.root = resolve(root)
-        this.compactBytes = options.compactBytes ?? DEFAULT_COMPACT_BYTES
-        this.compactEvents = options.compactEvents
-        this.compactUseEvents = normalizePositiveThreshold(options.compactUseEvents, DEFAULT_COMPACT_USE_EVENTS)
         this.fileOperations = { ...DEFAULT_FILE_OPERATIONS, ...options.fileOperations }
         this.warn = options.warn
         this.updates$ = this.updatesSubject.asObservable()
@@ -116,34 +118,48 @@ export class JsonlHistoryRepository {
                 return snapshot(state.entries)
             }
 
+            const existed = state.entries.has(normalizedCommand)
             const timestamp = at.toISOString()
             applyUse(state.entries, normalizedCommand, timestamp)
             trimToCapacity(state.entries, capacity)
             this.updatesSubject.next(key)
             this.mutationUpdatesSubject.next({ key, origin })
 
-            if (state.storageAvailable) {
-                const event: UseEvent = { v: 1, kind: 'use', command: normalizedCommand, at: timestamp }
-                const line = `${JSON.stringify(event)}\n`
+            if (state.storageAvailable && state.entries.has(normalizedCommand)) {
                 try {
                     await this.fileOperations.mkdir(join(this.root, 'connections'), { recursive: true })
-                    await this.fileOperations.appendFile(file, line, 'utf8')
-                    state.eventCount += 1
-                    state.fileBytes += Buffer.byteLength(line)
-                    state.useEventsSinceCompaction += 1
-                } catch {
-                    state.storageAvailable = false
-                    this.warnStorageFailure(key, 'append')
-                }
-
-                if (state.storageAvailable && this.shouldCompact(state, capacity)) {
-                    try {
+                    if (!existed) {
+                        const entry = state.entries.get(normalizedCommand)
+                        if (!entry) {
+                            throw new Error('missing entry')
+                        }
+                        const event: EntryEvent = {
+                            v: pluginVersion,
+                            kind: 'entry',
+                            command: entry.command,
+                            at: entry.lastUsedAt,
+                            count: entry.useCount,
+                        }
+                        const line = `${JSON.stringify(event)}\n`
+                        await this.fileOperations.appendFile(file, line, 'utf8')
+                        state.fileBytes += Buffer.byteLength(line)
+                        state.fileLines += 1
+                        if (state.fileLines > Math.max(1, normalizedCapacity(capacity))) {
+                            await compact(file, state.entries, this.fileOperations)
+                            state.fileBytes = compactedBytes(state.entries)
+                            state.fileLines = state.entries.size
+                        }
+                    } else {
                         await compact(file, state.entries, this.fileOperations)
-                        state.eventCount = state.entries.size
                         state.fileBytes = compactedBytes(state.entries)
-                        state.useEventsSinceCompaction = 0
-                    } catch {
-                        this.warnStorageFailure(key, 'compact')
+                        state.fileLines = state.entries.size
+                    }
+                } catch {
+                    if (!existed) {
+                        state.storageAvailable = false
+                        this.warnStorageFailure(key, 'append')
+                    } else {
+                        this.warnStorageFailure(key, 'rewrite')
                     }
                 }
             }
@@ -182,20 +198,22 @@ export class JsonlHistoryRepository {
         }
 
         const state = emptyState(true)
+        let shouldRewrite = false
         try {
             const contents = await this.fileOperations.readFile(file, 'utf8')
             state.fileBytes = Buffer.byteLength(contents)
+            state.fileLines = contents.split(/\r?\n/u).filter(line => line.length > 0).length
             for (const line of contents.split(/\r?\n/u)) {
-                if (line) {
-                    const replayed = replayLine(state.entries, line)
-                    if (replayed === 'invalid') {
-                        this.warnStorageFailure(key, 'replay')
-                        continue
-                    }
-                    state.eventCount += 1
-                    state.useEventsSinceCompaction = replayed === 'entry'
-                        ? 0
-                        : state.useEventsSinceCompaction + 1
+                if (!line) {
+                    continue
+                }
+                const replayed = replayLine(state.entries, line)
+                if (replayed.kind === 'invalid') {
+                    this.warnStorageFailure(key, 'replay')
+                    continue
+                }
+                if (replayed.legacy) {
+                    shouldRewrite = true
                 }
             }
         } catch (error) {
@@ -204,14 +222,19 @@ export class JsonlHistoryRepository {
                 this.warnStorageFailure(key, 'read')
             }
         }
+
+        if (state.storageAvailable && shouldRewrite) {
+            try {
+                await compact(file, state.entries, this.fileOperations)
+                state.fileBytes = compactedBytes(state.entries)
+                state.fileLines = state.entries.size
+            } catch {
+                state.storageAvailable = false
+                this.warnStorageFailure(key, 'migrate')
+            }
+        }
         states.set(file, state)
         return state
-    }
-
-    private shouldCompact (state: KeyState, capacity: number): boolean {
-        const eventLimit = this.compactEvents ?? Math.max(1, normalizedCapacity(capacity) * 2)
-        return state.eventCount >= eventLimit ||
-            (state.fileBytes >= this.compactBytes && state.useEventsSinceCompaction >= this.compactUseEvents)
     }
 
     private warnStorageFailure (key: string, stage: FailureStage): void {
@@ -269,23 +292,37 @@ async function compact (
     }
 }
 
-function replayLine (entries: Map<string, HistoryEntry>, line: string): ReplayLineKind {
+function replayLine (entries: Map<string, HistoryEntry>, line: string): ReplayResult {
     try {
         const event: unknown = JSON.parse(line)
-        if (isUseEvent(event)) {
-            applyUse(entries, normalizeCommand(event.command), event.at)
-            return 'use'
-        } else if (isEntryEvent(event)) {
+        if (isLegacyUseEvent(event)) {
             const command = normalizeCommand(event.command)
-            if (command) {
-                mergeContribution(entries, command, event.lastUsedAt, event.useCount)
-                return 'entry'
+            if (!command) {
+                return { kind: 'invalid', legacy: false }
             }
+            applyUse(entries, command, event.at)
+            return { kind: 'use', legacy: true }
+        }
+        if (isLegacyEntryEvent(event)) {
+            const command = normalizeCommand(event.command)
+            if (!command) {
+                return { kind: 'invalid', legacy: false }
+            }
+            mergeContribution(entries, command, event.lastUsedAt, event.useCount)
+            return { kind: 'entry', legacy: true }
+        }
+        if (isEntryEvent(event)) {
+            const command = normalizeCommand(event.command)
+            if (!command) {
+                return { kind: 'invalid', legacy: false }
+            }
+            mergeContribution(entries, command, event.at, event.count)
+            return { kind: 'entry', legacy: false }
         }
     } catch {
-        // A damaged line is isolated from the rest of the append-only log.
+        // A damaged line is isolated from the rest of the JSONL file.
     }
-    return 'invalid'
+    return { kind: 'invalid', legacy: false }
 }
 
 function applyUse (entries: Map<string, HistoryEntry>, command: string, at: string): void {
@@ -314,10 +351,6 @@ function normalizedCapacity (capacity: number): number {
     return Number.isFinite(capacity) ? Math.max(0, Math.floor(capacity)) : 0
 }
 
-function normalizePositiveThreshold (value: number | undefined, fallback: number): number {
-    return value !== undefined && Number.isFinite(value) && value >= 1 ? Math.floor(value) : fallback
-}
-
 function normalizeCommand (command: string): string {
     return command.replace(/\r\n?/gu, '\n').trim()
 }
@@ -330,8 +363,14 @@ function snapshot (entries: Map<string, HistoryEntry>): HistoryEntry[] {
 
 function compactedContents (entries: Map<string, HistoryEntry>): string {
     return snapshot(entries)
-        .map<EntryEvent>(entry => ({ v: 1, kind: 'entry', ...entry }))
-        .map(entry => JSON.stringify(entry))
+        .map<EntryEvent>(entry => ({
+            v: pluginVersion,
+            kind: 'entry',
+            command: entry.command,
+            at: entry.lastUsedAt,
+            count: entry.useCount,
+        }))
+        .map(event => JSON.stringify(event))
         .join('\n') + (entries.size ? '\n' : '')
 }
 
@@ -344,22 +383,30 @@ function temporaryFileFor (file: string): string {
 }
 
 function emptyState (storageAvailable: boolean): KeyState {
-    return { entries: new Map(), eventCount: 0, fileBytes: 0, storageAvailable, useEventsSinceCompaction: 0 }
+    return { entries: new Map(), fileBytes: 0, fileLines: 0, storageAvailable }
 }
 
-function isUseEvent (value: unknown): value is UseEvent {
+function isLegacyUseEvent (value: unknown): value is LegacyUseEvent {
     if (!isObject(value)) {
         return false
     }
     return value.v === 1 && value.kind === 'use' && isCommand(value.command) && isTimestamp(value.at)
 }
 
-function isEntryEvent (value: unknown): value is EntryEvent {
+function isLegacyEntryEvent (value: unknown): value is LegacyEntryEvent {
     if (!isObject(value)) {
         return false
     }
     return value.v === 1 && value.kind === 'entry' && isCommand(value.command) && isTimestamp(value.lastUsedAt) &&
-        Number.isInteger(value.useCount) && typeof value.useCount === 'number' && value.useCount > 0
+        isPositiveInteger(value.useCount)
+}
+
+function isEntryEvent (value: unknown): value is EntryEvent {
+    if (!isObject(value)) {
+        return false
+    }
+    return typeof value.v === 'string' && value.kind === 'entry' && isCommand(value.command) &&
+        isTimestamp(value.at) && isPositiveInteger(value.count)
 }
 
 function isObject (value: unknown): value is Record<string, unknown> {
@@ -372,6 +419,10 @@ function isCommand (value: unknown): value is string {
 
 function isTimestamp (value: unknown): value is string {
     return typeof value === 'string' && Number.isFinite(Date.parse(value))
+}
+
+function isPositiveInteger (value: unknown): value is number {
+    return typeof value === 'number' && Number.isInteger(value) && value > 0
 }
 
 function hasCode (error: unknown, code: string): boolean {

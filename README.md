@@ -2,7 +2,7 @@
 
 `tabby-cmd-history` 是面向 [Tabby](https://github.com/Eugeny/tabby) 桌面端的 connection 隔离命令历史与输入预测插件。它参考 PowerShell [about_History](https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_history) 和 [PSReadLine](https://learn.microsoft.com/powershell/module/psreadline/about/about_psreadline) 的历史预测体验，但不依赖 PowerShell，也不会替换 Shell 自己的历史机制。
 
-当前版本是 `0.2.0`，已发布到 npm。支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
+支持 Tabby desktop 1.x，peer range 为 `>=1.0.231-nightly.0 <2`；不支持 Tabby Web，因为浏览器环境不能满足原生用户目录文件持久化要求。
 
 ## 功能
 
@@ -17,27 +17,27 @@
 
 三种模式全部可在设置中切换，默认是 **B（list）**。设置界面中的枚举值如下：
 
-| 模式 | 设置值 | 行为 |
-|---|---|---|
-| A | `inline` | 在当前行显示选中候选的 ghost suffix。 |
-| B（默认） | `list` | 在光标附近显示候选列表，默认最多 5 条。 |
-| C | `hybrid` | 默认显示 inline 预测，按 Down 展开列表。 |
+| 模式      | 设置值     | 行为                                     |
+| --------- | ---------- | ---------------------------------------- |
+| A         | `inline` | 在当前行显示选中候选的 ghost suffix。    |
+| B（默认） | `list`   | 在光标附近显示候选列表，默认最多 5 条。  |
+| C         | `hybrid` | 默认显示 inline 预测，按 Down 展开列表。 |
 
 ## 默认配置和按键
 
-| 项目 | 默认值 |
-|---|---|
-| 插件 | 启用 |
-| 展示 | B / `list` |
-| 最短查询长度 | 1 |
-| 最大可见候选数 | 5 |
-| 匹配大小写 | 不区分 |
-| 每个 connection 唯一命令容量 | 4096 |
-| recency / frequency / matchCloseness | 55% / 30% / 15% |
-| 捕获 | `strict` |
-| 敏感过滤 | 启用 |
-| 上一条 / 下一条 | Up / Down |
-| 采纳 / 关闭 | Right / Escape（Enter 可选） |
+| 项目                                 | 默认值                       |
+| ------------------------------------ | ---------------------------- |
+| 插件                                 | 启用                         |
+| 展示                                 | B /`list`                  |
+| 最短查询长度                         | 1                            |
+| 最大可见候选数                       | 5                            |
+| 匹配大小写                           | 不区分                       |
+| 每个 connection 唯一命令容量         | 4096                         |
+| recency / frequency / matchCloseness | 55% / 30% / 15%              |
+| 捕获                                 | `strict`                   |
+| 敏感过滤                             | 启用                         |
+| 上一条 / 下一条                      | Up / Down                    |
+| 采纳 / 关闭                          | Right / Escape（Enter 可选） |
 
 导航和采纳按键可以改为设置页列出的 Arrow 或 Ctrl+Arrow 组合。插件拒绝普通可打印字符和 `Ctrl+C` 作为绑定。只有存在活动候选时，导航、采纳和关闭按键才由插件消费；没有候选时原始字节仍交给 Shell。Tab 始终交给 Shell；插件随后清空自己的重建 buffer 以丢弃可能已过期的文本，并在 Shell 补全输出到达后从可见行重建 buffer、恢复预测。
 
@@ -58,7 +58,7 @@
 - 通用模式不能可靠识别所有 Shell 续行提示。逐次 Enter 的续行可能被学习成多条提交，而不是最终 Shell 命令。
 - Shell 原生补全、未知控制序列或插件无法观察的命令行重写会立即使 buffer 清空并进入不可信状态：不再把过期文本当作当前命令。Shell 补全的输出到达后，插件用重写前的文本作为锚点从可见行重建 buffer（例如 `systemc` 被补全为 `systemctl`），预测随即恢复；无法重建的行保持隐藏，直到 Enter 或 `Ctrl+C` 重置。按 Enter 时，若重建失败，插件仍会用锚点从可见行恢复完整命令，恢复结果必须通过严格可见回显检查才会记录。
 - alternate screen（例如 Vim、less、top）期间完全禁用捕获和预测，所有输入直接透传；回到 normal screen 后从空 buffer 重新开始。
-- 未来可通过 `CommandCaptureAdapter` 接入 Shell 专用最终命令边界；`0.2.0` 不安装或注入任何 Shell hook。
+- 未来可通过 `CommandCaptureAdapter` 接入 Shell 专用最终命令边界；`0.3.0` 不安装或注入任何 Shell hook。
 
 ## 敏感历史策略
 
@@ -70,7 +70,7 @@
 
 ## Connection 身份和隔离
 
-仓储的每次 load、query、append、compact 和 clear 都必须显式携带 connection key。持久化文件名只使用规范身份的 SHA-256 小写十六进制摘要，不包含 profile 名、主机、用户名、密码、Token、当前目录或命令文本。
+仓储的每次 load、record 和 clear 都必须显式携带 connection key。持久化文件名只使用规范身份的 SHA-256 小写十六进制摘要，不包含 profile 名、主机、用户名、密码、Token、当前目录或命令文本。
 
 - 保存的 profile 使用稳定的 profile type 和 ID，重命名不会合并或移动历史。
 - SSH Quick Connect 使用规范化的用户、主机和实际端口。
@@ -86,29 +86,27 @@
 
 默认根目录：
 
-| 平台 | 路径 |
-|---|---|
-| Windows | `%APPDATA%\tabby\cmd-history` |
-| macOS | `~/Library/Application Support/tabby/cmd-history` |
-| Linux | `${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history` |
+| 平台    | 路径                                                   |
+| ------- | ------------------------------------------------------ |
+| Windows | `%APPDATA%\tabby\cmd-history`                        |
+| macOS   | `~/Library/Application Support/tabby/cmd-history`    |
+| Linux   | `${XDG_DATA_HOME:-~/.local/share}/tabby/cmd-history` |
 
 每个 connection 文件位于 `connections/<sha256>.jsonl`。高级设置中的自定义目录必须是当前用户主目录内的绝对路径；空值恢复默认目录，保存后需重启 Tabby 才会由仓储实例采用。
 
-追加事件示例：
+每个命令在文件中只保留一行 v2 聚合记录：
 
 ```json
-{"v":1,"kind":"use","command":"git status","at":"2026-08-12T12:00:00.000Z"}
+{"v":"0.3.0","kind":"entry","command":"git status","at":"2026-08-12T12:00:00.000Z","count":7}
 ```
 
-压缩后的聚合记录示例：
+- `v` 是写入该行时插件的版本号字符串（例如 `0.3.0`），与 `tabby-cmd-history` 自身版本号对齐。
+- `at` 是该命令最新一次执行时间，加载时映射为内存索引的 `lastUsedAt`。
+- `count` 是该命令累计使用次数，加载时映射为内存索引的 `useCount`。
 
-```json
-{"v":1,"kind":"entry","command":"git status","lastUsedAt":"2026-08-12T12:00:00.000Z","useCount":7}
-```
+旧版 `v:1` 的 `use`/`entry` 记录仍可读取；首次加载旧文件时会自动去重并迁移为上述 v2 格式（合并 `count`、保留最新 `at`）。新命令会追加一行；重复命令会更新已有行并原子重写整个文件，因此文件里不会出现同一命令的重复行。文件行数超过容量时会重写为容量内的唯一命令。
 
 加载会跳过损坏、未知或最后一行被截断的 JSONL 记录，并继续使用其余有效记录。追加或读取不可用时，插件按 connection 保留本进程内的 memory-only 历史，并对同一 connection/阶段最多记录一次不包含原始命令的警告；输入链路继续 fail-open。清空文件失败时设置页会显示失败，不会声称已清空持久化历史。
-
-JSONL 在事件数达到容量阈值时压缩；文件超过 2 MiB 时，还必须自上次成功压缩后累计 512 条成功写入的 `use` 事件才会再次压缩，避免大文件在每次追加后重复改写。
 
 卸载插件不会自动删除历史。若要删除数据，请先关闭 Tabby，确认是否需要备份，然后用文件管理器手工删除上述默认目录或设置过的自定义目录；插件和安装流程不会替你执行删除。
 
@@ -156,11 +154,11 @@ npm run verify
 
 `npm run verify` 依次执行 ESLint、插件与测试 TypeScript 类型检查、Jest、production webpack build 和真实 `npm pack --dry-run --json` allowlist 检查。发布包只允许 `dist/**`、`README.md`、`LICENSE` 和 `package.json`。
 
-2026-08-13 的自动化基线为 18 个 suite、305 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收。发布包不包含 `docs/`；请从源码 checkout 查看 `docs/manual-acceptance.md` 中的真实环境状态和复验步骤。
+2026-08-18 的自动化基线为 18 个 suite、322 个 test；4096 条唯一历史的查询 benchmark p95 为 0.204 ms，低于 10 ms 门槛。该数字来自自动测试，不等同于真实 Tabby GUI 验收。发布包不包含 `docs/`；请从源码 checkout 查看 `docs/manual-acceptance.md` 中的真实环境状态和复验步骤。
 
 ## 界面截图
 
-当前仓库没有经过真实 Tabby 验证的截图，因此不提供生成图或示意图冒充产品截图。后续人工采集的真实截图预留在 `docs/images/`，但该目录不会进入 `0.2.0` npm 包。
+当前仓库没有经过真实 Tabby 验证的截图，因此不提供生成图或示意图冒充产品截图。后续人工采集的真实截图预留在 `docs/images/`，但该目录不会进入 `0.3.0` npm 包。
 
 ## 安全边界摘要
 

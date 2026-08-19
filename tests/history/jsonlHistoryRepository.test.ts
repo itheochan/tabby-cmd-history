@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { version as pluginVersion } from '../../package.json'
 import { JsonlHistoryRepository } from '../../src/history/jsonlHistoryRepository'
 
 const roots: string[] = []
@@ -15,6 +16,23 @@ async function makeRoot (): Promise<string> {
     return root
 }
 
+async function readRecords (root: string, key: string): Promise<Array<Record<string, unknown>>> {
+    const contents = await readFile(join(root, 'connections', `${key}.jsonl`), 'utf8')
+    return contents.trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
+}
+
+function legacyUse (command: string, at: string): string {
+    return JSON.stringify({ v: 1, kind: 'use', command, at })
+}
+
+function legacyEntry (command: string, lastUsedAt: string, useCount: number): string {
+    return JSON.stringify({ v: 1, kind: 'entry', command, lastUsedAt, useCount })
+}
+
+function currentEntry (command: string, at: string, count: number): string {
+    return JSON.stringify({ v: pluginVersion, kind: 'entry', command, at, count })
+}
+
 test('aggregates independently by connection key', async () => {
     const root = await makeRoot()
     const repo = new JsonlHistoryRepository(root)
@@ -26,6 +44,9 @@ test('aggregates independently by connection key', async () => {
         { command: 'git status', lastUsedAt: '2026-08-12T11:00:00.000Z', useCount: 2 },
     ])
     expect((await repo.load('b'.repeat(64), 4096))[0].command).toBe('pwd')
+    expect(await readRecords(root, 'a'.repeat(64))).toEqual([
+        { v: pluginVersion, kind: 'entry', command: 'git status', at: '2026-08-12T11:00:00.000Z', count: 2 },
+    ])
 })
 
 test('skips corrupt lines and evicts least recently used', async () => {
@@ -34,9 +55,9 @@ test('skips corrupt lines and evicts least recently used', async () => {
     const file = join(root, 'connections', `${key}.jsonl`)
     await mkdir(join(root, 'connections'), { recursive: true })
     await writeFile(file, [
-        JSON.stringify({ v: 1, kind: 'entry', command: 'old', lastUsedAt: '2026-01-01T00:00:00Z', useCount: 9 }),
+        legacyEntry('old', '2026-01-01T00:00:00Z', 9),
         '{broken',
-        JSON.stringify({ v: 1, kind: 'use', command: 'new', at: '2026-08-12T00:00:00Z' }),
+        legacyUse('new', '2026-08-12T00:00:00Z'),
     ].join('\n'))
 
     expect(await new JsonlHistoryRepository(root).load(key, 1)).toEqual([
@@ -50,14 +71,17 @@ test('replay sums normalized-equivalent entries and uses while retaining the new
     const file = join(root, 'connections', `${key}.jsonl`)
     await mkdir(join(root, 'connections'), { recursive: true })
     await writeFile(file, [
-        JSON.stringify({ v: 1, kind: 'use', command: ' git status\r\n', at: '2026-08-12T10:00:00Z' }),
-        JSON.stringify({ v: 1, kind: 'entry', command: 'git status', lastUsedAt: '2026-08-12T09:00:00Z', useCount: 3 }),
-        JSON.stringify({ v: 1, kind: 'entry', command: '\tgit status ', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 2 }),
-        JSON.stringify({ v: 1, kind: 'use', command: 'git status', at: '2026-08-12T08:00:00Z' }),
+        legacyUse(' git status\r\n', '2026-08-12T10:00:00Z'),
+        legacyEntry('git status', '2026-08-12T09:00:00Z', 3),
+        legacyEntry('\tgit status ', '2026-08-12T11:00:00Z', 2),
+        legacyUse('git status', '2026-08-12T08:00:00Z'),
     ].join('\n'))
 
     expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual([
         { command: 'git status', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 7 },
+    ])
+    expect(await readRecords(root, key)).toEqual([
+        { v: pluginVersion, kind: 'entry', command: 'git status', at: '2026-08-12T11:00:00Z', count: 7 },
     ])
 })
 
@@ -112,9 +136,9 @@ test('serializes concurrent writes for the same connection key', async () => {
     expect(await repositories[0].load(key, 100)).toEqual([
         { command: 'git status', lastUsedAt: '2026-08-12T10:19:00.000Z', useCount: 20 },
     ])
-    const lines = (await readFile(join(root, 'connections', `${key}.jsonl`), 'utf8')).trim().split('\n')
-    expect(lines).toHaveLength(20)
-    expect(lines.map(line => JSON.parse(line))).toHaveLength(20)
+    expect(await readRecords(root, key)).toEqual([
+        { v: pluginVersion, kind: 'entry', command: 'git status', at: '2026-08-12T10:19:00.000Z', count: 20 },
+    ])
 })
 
 test('serializes a same-key clear after an already queued record across repository instances', async () => {
@@ -151,7 +175,7 @@ test('serializes a same-key record after an already queued clear across reposito
     ])
 })
 
-test('normalizes commands before aggregating and retains the most recent unique commands', async () => {
+test('normalizes commands before aggregating, retains the most recent unique commands, and bounds file lines', async () => {
     const root = await makeRoot()
     const repo = new JsonlHistoryRepository(root)
     const key = '3'.repeat(64)
@@ -165,13 +189,77 @@ test('normalizes commands before aggregating and retains the most recent unique 
         { command: 'new', lastUsedAt: '2026-08-12T12:00:00.000Z', useCount: 1 },
         { command: 'git status', lastUsedAt: '2026-08-12T11:00:00.000Z', useCount: 2 },
     ])
+    expect(await readRecords(root, key)).toHaveLength(2)
 })
 
-test('does not rewrite a corrupt source merely because load skipped lines', async () => {
+test('writes the current plugin version and at/count field names', async () => {
+    const root = await makeRoot()
+    const repo = new JsonlHistoryRepository(root)
+    const key = '8'.repeat(64)
+
+    await repo.record(key, 'git status', new Date('2026-08-12T10:00:00Z'), 10)
+    await repo.record(key, 'git status', new Date('2026-08-12T11:00:00Z'), 10)
+
+    const records = await readRecords(root, key)
+    expect(records).toHaveLength(1)
+    expect(records[0]).toEqual({
+        v: pluginVersion,
+        kind: 'entry',
+        command: 'git status',
+        at: '2026-08-12T11:00:00.000Z',
+        count: 2,
+    })
+    expect(records[0].v).toEqual(expect.any(String))
+})
+
+test('migrates legacy v1 duplicates to a single current-format entry', async () => {
     const root = await makeRoot()
     const key = '4'.repeat(64)
     const file = join(root, 'connections', `${key}.jsonl`)
-    const source = `${JSON.stringify({ v: 1, kind: 'use', command: 'valid', at: '2026-08-12T10:00:00Z' })}\n{broken\n`
+    await mkdir(join(root, 'connections'), { recursive: true })
+    await writeFile(file, [
+        legacyUse('echo test', '2026-08-13T08:38:31.807Z'),
+        legacyUse('echo test', '2026-08-14T03:22:06.498Z'),
+        legacyUse('echo mytest', '2026-08-14T03:22:10.925Z'),
+        legacyEntry('echo', '2026-08-14T03:22:30.155Z', 3),
+    ].join('\n'))
+
+    expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual([
+        { command: 'echo', lastUsedAt: '2026-08-14T03:22:30.155Z', useCount: 3 },
+        { command: 'echo mytest', lastUsedAt: '2026-08-14T03:22:10.925Z', useCount: 1 },
+        { command: 'echo test', lastUsedAt: '2026-08-14T03:22:06.498Z', useCount: 2 },
+    ])
+    expect(await readRecords(root, key)).toEqual([
+        { v: pluginVersion, kind: 'entry', command: 'echo', at: '2026-08-14T03:22:30.155Z', count: 3 },
+        { v: pluginVersion, kind: 'entry', command: 'echo mytest', at: '2026-08-14T03:22:10.925Z', count: 1 },
+        { v: pluginVersion, kind: 'entry', command: 'echo test', at: '2026-08-14T03:22:06.498Z', count: 2 },
+    ])
+})
+
+test('deduplicates duplicate current-format entries in memory without rewriting the file', async () => {
+    const root = await makeRoot()
+    const key = '5'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    const source = [
+        currentEntry('git status', '2026-08-12T10:00:00Z', 2),
+        currentEntry('git status', '2026-08-12T11:00:00Z', 3),
+        currentEntry('pwd', '2026-08-12T12:00:00Z', 1),
+    ].join('\n')
+    await mkdir(join(root, 'connections'), { recursive: true })
+    await writeFile(file, source)
+
+    expect(await new JsonlHistoryRepository(root).load(key, 10)).toEqual([
+        { command: 'pwd', lastUsedAt: '2026-08-12T12:00:00Z', useCount: 1 },
+        { command: 'git status', lastUsedAt: '2026-08-12T11:00:00Z', useCount: 5 },
+    ])
+    expect(await readFile(file, 'utf8')).toBe(source)
+})
+
+test('does not rewrite a current-format corrupt source merely because load skipped lines', async () => {
+    const root = await makeRoot()
+    const key = '6'.repeat(64)
+    const file = join(root, 'connections', `${key}.jsonl`)
+    const source = `${currentEntry('valid', '2026-08-12T10:00:00Z', 1)}\n{broken\n`
     await mkdir(join(root, 'connections'), { recursive: true })
     await writeFile(file, source)
 
@@ -179,17 +267,17 @@ test('does not rewrite a corrupt source merely because load skipped lines', asyn
     expect(await readFile(file, 'utf8')).toBe(source)
 })
 
-test('warns once for corrupt or unknown replay lines without leaking or rewriting source bytes', async () => {
+test('warns once for corrupt or unknown replay lines without leaking or rewriting a current-format source', async () => {
     const root = await makeRoot()
     const key = 'e'.repeat(64)
     const file = join(root, 'connections', `${key}.jsonl`)
     const secret = 'sentinel-private-command'
     const warn = jest.fn()
     const source = [
-        JSON.stringify({ v: 1, kind: 'use', command: 'valid before', at: '2026-08-12T10:00:00Z' }),
+        currentEntry('valid before', '2026-08-12T10:00:00Z', 1),
         `{broken-${secret}`,
-        JSON.stringify({ v: 1, kind: 'future', payload: secret }),
-        JSON.stringify({ v: 1, kind: 'use', command: 'valid after', at: '2026-08-12T11:00:00Z' }),
+        JSON.stringify({ v: pluginVersion, kind: 'future', payload: secret }),
+        currentEntry('valid after', '2026-08-12T11:00:00Z', 1),
     ].join('\n')
     await mkdir(join(root, 'connections'), { recursive: true })
     await writeFile(file, source)
@@ -202,115 +290,6 @@ test('warns once for corrupt or unknown replay lines without leaking or rewritin
     expect(warn.mock.calls.flat().join(' ')).not.toContain(secret)
     expect(warn.mock.calls.flat().join(' ')).not.toContain(root)
     expect(await readFile(file, 'utf8')).toBe(source)
-})
-
-test('compacts events into aggregate entries', async () => {
-    const root = await makeRoot()
-    const key = 'f'.repeat(64)
-    const repo = new JsonlHistoryRepository(root, { compactEvents: 3 })
-    await repo.record(key, 'git status', new Date('2026-08-12T10:00:00Z'), 10)
-    await repo.record(key, 'git status', new Date('2026-08-12T11:00:00Z'), 10)
-    await repo.record(key, 'pwd', new Date('2026-08-12T12:00:00Z'), 10)
-
-    const records = (await readFile(join(root, 'connections', `${key}.jsonl`), 'utf8'))
-        .trim().split('\n').map(line => JSON.parse(line))
-    expect(records).toEqual(expect.arrayContaining([
-        expect.objectContaining({ kind: 'entry', command: 'git status', useCount: 2 }),
-        expect.objectContaining({ kind: 'entry', command: 'pwd', useCount: 1 }),
-    ]))
-    expect(records).toHaveLength(2)
-    expect((await readdir(join(root, 'connections'))).filter(name => name.includes('.tmp'))).toEqual([])
-})
-
-test('compacts an oversized file only after 512 use events and waits for the next cadence', async () => {
-    const root = await makeRoot()
-    const key = 'b'.repeat(64)
-    const file = join(root, 'connections', `${key}.jsonl`)
-    const repo = new JsonlHistoryRepository(root, { compactBytes: 1, compactEvents: 1000 })
-
-    await repo.record(key, 'one', new Date('2026-08-12T10:00:00Z'), 10)
-    let records = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    expect(records).toEqual([
-        expect.objectContaining({ kind: 'use', command: 'one' }),
-    ])
-
-    for (let index = 1; index < 512; index++) {
-        await repo.record(key, 'one', new Date(1_786_531_200_000 + index), 10)
-    }
-
-    records = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    expect(records).toEqual([
-        expect.objectContaining({ kind: 'entry', command: 'one', useCount: 512 }),
-    ])
-
-    await repo.record(key, 'one', new Date(1_786_531_200_000 + 512), 10)
-    records = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    expect(records).toEqual([
-        expect.objectContaining({ kind: 'entry', command: 'one', useCount: 512 }),
-        expect.objectContaining({ kind: 'use', command: 'one' }),
-    ])
-})
-
-test('derives the byte compaction cadence from uses after the loaded entry collection', async () => {
-    const root = await makeRoot()
-    const key = '1'.repeat(64)
-    const file = join(root, 'connections', `${key}.jsonl`)
-    const source = [
-        JSON.stringify({ v: 1, kind: 'entry', command: 'existing', lastUsedAt: '2026-08-12T09:00:00Z', useCount: 4 }),
-        '{corrupt-does-not-count',
-        JSON.stringify({ v: 1, kind: 'future' }),
-    ].join('\n') + '\n'
-    await mkdir(join(root, 'connections'), { recursive: true })
-    await writeFile(file, source)
-    const repo = new JsonlHistoryRepository(root, {
-        compactBytes: 1,
-        compactEvents: 100,
-        compactUseEvents: 2,
-    })
-
-    await repo.record(key, 'first use', new Date('2026-08-12T10:00:00Z'), 10)
-    expect(await readFile(file, 'utf8')).toBe(source + `${JSON.stringify({
-        v: 1, kind: 'use', command: 'first use', at: '2026-08-12T10:00:00.000Z',
-    })}\n`)
-
-    await repo.record(key, 'second use', new Date('2026-08-12T11:00:00Z'), 10)
-    const records = (await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-    expect(records.every(record => record.kind === 'entry')).toBe(true)
-})
-
-test('retains the use cadence after failed byte compaction so the next append retries', async () => {
-    const root = await makeRoot()
-    const key = '2'.repeat(64)
-    const file = join(root, 'connections', `${key}.jsonl`)
-    let renameAttempts = 0
-    const repo = new JsonlHistoryRepository(root, {
-        compactBytes: 1,
-        compactEvents: 100,
-        compactUseEvents: 2,
-        fileOperations: {
-            rename: async (source, destination) => {
-                renameAttempts += 1
-                if (renameAttempts === 1) {
-                    throw new Error('rename unavailable')
-                }
-                await rename(source, destination)
-            },
-        },
-    })
-
-    await repo.record(key, 'one', new Date('2026-08-12T10:00:00Z'), 10)
-    await repo.record(key, 'two', new Date('2026-08-12T11:00:00Z'), 10)
-    expect(renameAttempts).toBe(1)
-    expect((await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line)))
-        .toEqual(expect.arrayContaining([
-            expect.objectContaining({ kind: 'use', command: 'one' }),
-            expect.objectContaining({ kind: 'use', command: 'two' }),
-        ]))
-
-    await repo.record(key, 'three', new Date('2026-08-12T12:00:00Z'), 10)
-    expect(renameAttempts).toBe(2)
-    expect((await readFile(file, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-        .every(record => record.kind === 'entry')).toBe(true)
 })
 
 test('keeps memory history and warns once for repeated read failures without command text', async () => {
@@ -390,7 +369,7 @@ test('failed clear preserves disk bytes and state, emits no update, and can be r
         failure = error
     }
     expect(failure).toEqual(new Error('Unable to clear command history'))
-    expect(String(failure)).not.toMatch(new RegExp(`${key}|existing|${root.replace(/\\/gu, '\\\\')}`, 'u'))
+    expect(String(failure)).not.toMatch(new RegExp(`${key}|existing|${root.replace(/\\/gu, '\\\\\\\\')}`, 'u'))
     expect(await readFile(file, 'utf8')).toBe(before)
     expect((await repo.load(key, 10)).map(item => item.command)).toEqual(['existing command'])
     expect(updates).toEqual([])
@@ -429,42 +408,45 @@ test('temporary-file delete failure leaves the main history bytes untouched', as
     expect(updates).toEqual([])
 })
 
-test('preserves source bytes and unrelated temp files when rename fails after compaction sync', async () => {
+test('rewrite failure warns once, preserves source bytes, and retries on the next record', async () => {
     const root = await makeRoot()
     const key = '5'.repeat(64)
     const file = join(root, 'connections', `${key}.jsonl`)
     const otherTemp = join(root, 'connections', `${'8'.repeat(64)}.jsonl.compact.tmp`)
     const warn = jest.fn()
-    let bytesAtRename = ''
+    let renameAttempts = 0
     const repo = new JsonlHistoryRepository(root, {
-        compactEvents: 2,
         warn,
         fileOperations: {
-            rename: async () => {
-                bytesAtRename = await readFile(file, 'utf8')
-                throw new Error('rename unavailable')
+            rename: async (source, destination) => {
+                renameAttempts += 1
+                if (renameAttempts === 1) {
+                    throw new Error('rename unavailable')
+                }
+                await rename(source, destination)
             },
         },
     })
 
     await mkdir(join(root, 'connections'), { recursive: true })
-    await writeFile(file, `${JSON.stringify({ v: 1, kind: 'use', command: 'existing', at: '2026-08-12T09:00:00Z' })}\n`)
+    await writeFile(file, `${currentEntry('existing', '2026-08-12T09:00:00Z', 1)}\n`)
     await writeFile(otherTemp, 'unrelated')
-    await repo.record(key, 'new', new Date('2026-08-12T10:00:00Z'), 10)
 
-    expect(bytesAtRename).not.toBe('')
-    expect(await readFile(file, 'utf8')).toBe(bytesAtRename)
+    await repo.record(key, 'existing', new Date('2026-08-12T10:00:00Z'), 10)
+    expect(renameAttempts).toBe(1)
+    expect(await readFile(file, 'utf8')).toBe(`${currentEntry('existing', '2026-08-12T09:00:00Z', 1)}\n`)
     expect(await readFile(otherTemp, 'utf8')).toBe('unrelated')
-    expect(await readdir(join(root, 'connections'))).not.toContain(`${key}.jsonl.compact.tmp`)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage compact')])
+    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage rewrite')])
+    expect((await repo.load(key, 10))[0]).toEqual({
+        command: 'existing',
+        lastUsedAt: '2026-08-12T10:00:00.000Z',
+        useCount: 2,
+    })
 
-    jest.resetModules()
-    const { JsonlHistoryRepository: RestartedRepository } = await import('../../src/history/jsonlHistoryRepository')
-    expect(await new RestartedRepository(root).load(key, 10)).toEqual(expect.arrayContaining([
-        expect.objectContaining({ command: 'existing' }),
-        expect.objectContaining({ command: 'new' }),
-    ]))
-
-    await repo.record(key, 'later', new Date('2026-08-12T11:00:00Z'), 10)
-    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage compact')])
+    await repo.record(key, 'existing', new Date('2026-08-12T11:00:00Z'), 10)
+    expect(renameAttempts).toBe(2)
+    expect(await readRecords(root, key)).toEqual([
+        { v: pluginVersion, kind: 'entry', command: 'existing', at: '2026-08-12T11:00:00.000Z', count: 3 },
+    ])
+    expect(warn.mock.calls.map(call => call[0])).toEqual([expect.stringContaining('stage rewrite')])
 })
